@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { addEventMessage, addIncomingEventMessage, createInitialSocialState, isCurrentUser, joinEventCrew, leaveEventCrew, loadSocialState, saveSocialState } from '../lib/social-storage';
 import type { CrewMember, CrewMessage, SocialState } from '../types/social';
 import CampusMap from './CampusMap';
-import QuestSystem from './QuestSystem';
+import QuestSystem, { type QuestClaim, type QuestEvent } from './QuestSystem';
 import HangoutHub from './HangoutHub';
 import LanguageExchange from './LanguageExchange';
 
@@ -17,12 +17,19 @@ type Profile = {
   phone: string;
   role: 'student' | 'organizer';
   clubName: string;
+  bio: string;
+  interests: string[];
+  favouriteActivities: string[];
+  avatar: string;
 };
 
 type MembershipPlan = 'Free' | 'Explorer' | 'Premium';
 
-const emptyProfile: Profile = { email: '', name: '', year: '', semester: '', major: '', phone: '', role: 'student', clubName: '' };
+const emptyProfile: Profile = { email: '', name: '', year: '', semester: '', major: '', phone: '', role: 'student', clubName: '', bio: '', interests: [], favouriteActivities: [], avatar: '🌟' };
 const usydStudentEmail = /^[^@\s]+@uni\.sydney\.edu\.au$/i;
+const interestOptions = ['Art', 'AI', 'Business', 'Culture', 'Food', 'Gaming', 'Music', 'Outdoors', 'Science', 'Sport', 'Tech', 'Travel'];
+const activityOptions = ['Brunch', 'Club events', 'Coffee chats', 'Gallery walks', 'Language exchange', 'Live music', 'Running', 'Study sessions', 'Volunteering', 'Weekend trips'];
+const avatarOptions = ['🌟', '🦊', '🐼', '🐨', '🐯', '🦋', '🌻', '🍓', '🎧', '🚀', '🎨', '🌊'];
 
 type EventItem = {
   id: number; title: string; host: string; time: string; place: string; address: string;
@@ -89,8 +96,14 @@ export default function Home() {
   const [readMessageIds, setReadMessageIds] = useState<string[]>([]);
   const [facultyFilter, setFacultyFilter] = useState('All faculties');
   const [aiInsights, setAiInsights] = useState<Record<number, { reason: string; matchScore: number }>>({});
-  const allEvents = useMemo(() => [...events, ...customEvents], [customEvents]);
+  const [questClaims, setQuestClaims] = useState<QuestClaim[]>([]);
+  const [questEventSeed, setQuestEventSeed] = useState<EventItem | null>(null);
+  const [questMapEvent, setQuestMapEvent] = useState<EventItem | null>(null);
+  const [viewedMember, setViewedMember] = useState<CrewMember | null>(null);
+  const baseEvents = useMemo(() => [...events, ...customEvents], [customEvents]);
+  const allEvents = useMemo(() => questMapEvent ? [...baseEvents, questMapEvent] : baseEvents, [baseEvents, questMapEvent]);
   const faculties = useMemo(() => Array.from(new Set(allEvents.map(event => event.faculty))), [allEvents]);
+  const questRecommendations = useMemo(() => [...baseEvents].sort((a, b) => (aiInsights[b.id]?.matchScore ?? 0) - (aiInsights[a.id]?.matchScore ?? 0)).slice(0, 3), [aiInsights, baseEvents]);
 
   const visibleEvents = useMemo(() => {
     const today = new Intl.DateTimeFormat('en-AU', { weekday: 'short' }).format(new Date());
@@ -140,6 +153,8 @@ export default function Home() {
       if (Array.isArray(savedFriends)) setFriends(savedFriends);
       setDirectMessages(JSON.parse(window.localStorage.getItem('sidequest-direct-messages') ?? '{}'));
       setReadMessageIds(JSON.parse(window.localStorage.getItem('sidequest-read-messages') ?? '[]'));
+      const savedQuestState = JSON.parse(window.localStorage.getItem('sidequest-quest-state') ?? 'null') as { claims?: QuestClaim[] } | null;
+      if (Array.isArray(savedQuestState?.claims)) setQuestClaims(savedQuestState.claims);
     } catch {
       window.localStorage.removeItem('sidequest-custom-events');
       window.localStorage.removeItem('sidequest-friends');
@@ -204,7 +219,7 @@ export default function Home() {
 
   const saveProfile = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const clean = Object.fromEntries(Object.entries(profileDraft).map(([key, value]) => [key, value.trim()])) as Profile;
+    const clean: Profile = { ...profileDraft, email: profileDraft.email.trim(), name: profileDraft.name.trim(), year: profileDraft.year.trim(), semester: profileDraft.semester.trim(), major: profileDraft.major.trim(), phone: profileDraft.phone.trim(), clubName: profileDraft.clubName.trim(), bio: profileDraft.bio.trim(), interests: profileDraft.interests.slice(0, 6), favouriteActivities: profileDraft.favouriteActivities.slice(0, 6), avatar: profileDraft.avatar || '🌟' };
     if (!usydStudentEmail.test(clean.email)) {
       setProfileError('Use your University of Sydney student email ending in @uni.sydney.edu.au.');
       return;
@@ -213,6 +228,7 @@ export default function Home() {
     window.localStorage.setItem('sidequest-profile', JSON.stringify(clean));
     setProfile(clean);
     setProfileDraft(clean);
+    updateSocial(current => ({ ...current, membersByEvent: Object.fromEntries(Object.entries(current.membersByEvent).map(([eventId, members]) => [eventId, members.map(member => isCurrentUser(member) ? { ...member, displayName: clean.name, major: clean.major, semester: clean.semester, bio: clean.bio, interests: clean.interests, favouriteActivities: clean.favouriteActivities, profileAvatar: clean.avatar } : member)])) }));
     setEditingProfile(false);
     setSignupDismissed(true);
   };
@@ -222,6 +238,16 @@ export default function Home() {
     setProfileError('');
     setEditingProfile(true);
     setSignupDismissed(false);
+  };
+
+  const uploadAvatar = (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return setProfileError('Choose a JPG, PNG, WEBP or GIF image.');
+    if (file.size > 1024 * 1024) return setProfileError('Avatar photos must be smaller than 1 MB.');
+    const reader = new FileReader();
+    reader.onload = () => { if (typeof reader.result === 'string') { setProfileDraft(current => ({ ...current, avatar: reader.result as string })); setProfileError(''); } };
+    reader.onerror = () => setProfileError('That photo could not be read. Please choose another image.');
+    reader.readAsDataURL(file);
   };
 
   const selectMembershipPlan = (plan: MembershipPlan) => {
@@ -288,7 +314,7 @@ export default function Home() {
       setChatOpen(false);
       return;
     }
-    updateSocial(current => joinEventCrew(current, selected.id, profile ? { displayName: profile.name, major: profile.major, semester: profile.semester } : undefined));
+    updateSocial(current => joinEventCrew(current, selected.id, profile ? { displayName: profile.name, major: profile.major, semester: profile.semester, bio: profile.bio, interests: profile.interests, favouriteActivities: profile.favouriteActivities, profileAvatar: profile.avatar } : undefined));
   };
 
   const openCrewFromMessages = (eventItem: EventItem) => {
@@ -323,6 +349,39 @@ export default function Home() {
       setChatOpen(false);
       setSelectedFriend(null);
       return;
+    }
+  };
+
+  const openQuestEvent = (event: QuestEvent) => {
+    const fullEvent = allEvents.find(item => item.id === event.id);
+    if (fullEvent) setSelected(fullEvent);
+    selectNav('discover');
+  };
+
+  const showQuestOnMap = async (claim: QuestClaim) => {
+    const linkedEvent = claim.sourceEventId ? baseEvents.find(event => event.id === claim.sourceEventId) : undefined;
+    if (linkedEvent) {
+      setQuestMapEvent(null);
+      setSelected(linkedEvent);
+      selectNav('discover');
+      return;
+    }
+    try {
+      const response = await fetch('/api/geocode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: claim.venue }) });
+      const location = await response.json() as { lat?: number; lng?: number; displayName?: string; message?: string };
+      if (!response.ok || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) throw new Error(location.message || 'Address could not be located.');
+      const date = new Date(`${claim.date}T12:00:00`);
+      const day = new Intl.DateTimeFormat('en-AU', { weekday: 'short' }).format(date);
+      const [hours, minutes] = claim.time.split(':').map(Number);
+      const time = new Date(2000, 0, 1, hours, minutes).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
+      const marker: EventItem = { id: -Math.abs(Date.now()), title: claim.title, host: 'My Quest', time: `${day} · ${time}`, place: 'Quest meeting point', address: location.displayName ?? claim.venue, lat: location.lat!, lng: location.lng!, faculty: 'Quest', emoji: claim.emoji, color: claim.colour, reason: 'This is the real meeting address saved with your claimed quest.', tags: ['My Quest', '24 hours'] };
+      setQuestMapEvent(marker);
+      setSelected(marker);
+      setFilter('For you');
+      setFacultyFilter('All faculties');
+      selectNav('discover');
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Address could not be located.');
     }
   };
 
@@ -423,6 +482,10 @@ export default function Home() {
       displayName: profile.name,
       major: profile.major,
       semester: profile.semester,
+      bio: profile.bio,
+      interests: profile.interests,
+      favouriteActivities: profile.favouriteActivities,
+      profileAvatar: profile.avatar,
     } : undefined));
     setSelected(nextEvent);
     setAddEventOpen(false);
@@ -473,10 +536,11 @@ export default function Home() {
       <div className="brand"><span className="brand-mark">✦</span><span>sidequest</span></div>
       <nav aria-label="Main navigation"><button className={activeNav === 'discover' ? 'nav-active' : ''} onClick={() => selectNav('discover')}><span className="nav-icon">⌖</span><span>Discover</span></button><button className={activeNav === 'hangout' ? 'nav-active' : ''} onClick={() => selectNav('hangout')}><span className="nav-icon">◉</span><span>Who’s free?</span></button><button className={activeNav === 'week' ? 'nav-active' : ''} onClick={() => selectNav('week')}><span className="nav-icon">▦</span><span>Calendar</span></button><button className={activeNav === 'quests' ? 'nav-active' : ''} onClick={() => selectNav('quests')}><span className="nav-icon">✦</span><span>Quests</span></button><button className={activeNav === 'language' ? 'nav-active' : ''} onClick={() => selectNav('language')}><span className="nav-icon">文</span><span>Languages</span></button><button className={activeNav === 'messages' ? 'nav-active' : ''} onClick={() => selectNav('messages')}><span className="nav-icon">✉</span><span>Messages</span>{unreadCount > 0 && <span className="notification">{unreadCount}</span>}</button></nav>
       <div className="profile-area">
-        <button className="profile" onClick={() => profile ? setProfileMenuOpen(current => !current) : openProfile()} aria-label={profile ? 'Open account menu' : 'Sign up'} aria-expanded={profile ? profileMenuOpen : undefined}><span>{profile?.name?.split(' ')[0] ?? 'Sign up'}</span><span className="avatar">{profile?.name?.charAt(0).toUpperCase() ?? '+'}</span></button>
+        <button className="profile" onClick={() => profile ? setProfileMenuOpen(current => !current) : openProfile()} aria-label={profile ? 'Open account menu' : 'Sign up'} aria-expanded={profile ? profileMenuOpen : undefined}><span>{profile?.name?.split(' ')[0] ?? 'Sign up'}</span><span className="avatar"><AvatarVisual value={profile?.avatar ?? '+'} /></span></button>
         {profileMenuOpen && profile && <div className="profile-menu" role="menu">
-          <div className="profile-menu-header"><span className="avatar">{profile.name.charAt(0).toUpperCase()}</span><div><b>{profile.name}</b><small>{profile.email}</small><em>{membershipPlan} · {profile.role === 'organizer' ? profile.clubName || 'Club organizer' : 'Student'}</em></div></div>
+          <div className="profile-menu-header"><span className="avatar"><AvatarVisual value={profile.avatar} /></span><div><b>{profile.name}</b><small>{profile.email}</small><em>{membershipPlan} · {profile.role === 'organizer' ? profile.clubName || 'Club organizer' : 'Student'}</em></div></div>
           <button role="menuitem" onClick={() => { setProfileMenuOpen(false); openProfile(); }}><span>👤</span><div><b>Account details</b><small>View or edit your profile</small></div></button>
+          <button role="menuitem" onClick={() => { setProfileMenuOpen(false); setViewedMember({ userId: 'current-user', anonymousAlias: profile.name, anonymousAvatar: profile.avatar, profileAvatar: profile.avatar, displayName: profile.name, major: profile.major, semester: profile.semester, bio: profile.bio, interests: profile.interests, favouriteActivities: profile.favouriteActivities }); }}><span>✨</span><div><b>My social profile</b><small>See what other students can view</small></div></button>
           <button role="menuitem" onClick={() => { setProfileMenuOpen(false); selectNav('messages'); }}><span>✉️</span><div><b>Inbox</b><small>{unreadCount ? `${unreadCount} unread messages` : 'Your chats and crews'}</small></div></button>
           <button role="menuitem" onClick={openSavedEvents}><span>🔖</span><div><b>Saved events</b><small>{savedEventIds.length ? `${savedEventIds.length} saved ${savedEventIds.length === 1 ? 'event' : 'events'}` : 'Your bookmarks will appear here'}</small></div></button>
           <button role="menuitem" onClick={() => { setProfileMenuOpen(false); setSettingsOpen(true); }}><span>⚙️</span><div><b>Settings</b><small>Manage local preferences</small></div></button>
@@ -486,7 +550,7 @@ export default function Home() {
       </div>
     </header>
 
-    {activeNav === 'quests' && <QuestSystem />}
+    {activeNav === 'quests' && <QuestSystem recommendedEvents={questRecommendations} initialEvent={questEventSeed} onInitialEventUsed={() => setQuestEventSeed(null)} onOpenEvent={openQuestEvent} onShowMap={showQuestOnMap} onClaimsChange={setQuestClaims} />}
     {activeNav === 'hangout' && <HangoutHub />}
     {activeNav === 'language' && <LanguageExchange hasAccount={Boolean(profile)} onCreateAccount={openProfile} />}
     {activeNav === 'messages' && <section className="messages-hub">
@@ -505,17 +569,19 @@ export default function Home() {
           <div className="calendar-body">
             {calendarHours.map(hour => <div className="time-row" key={hour} style={{top:`${(hour / 24) * 100}%`}}><span>{hour === 0 || hour === 24 ? '12:00 AM' : `${hour > 12 ? hour - 12 : hour}:00 ${hour >= 12 ? 'PM' : 'AM'}`}</span><i /></div>)}
             <div className="day-columns">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => <i key={day} />)}</div>
-            <div className="calendar-events">{visibleEvents.map(event => { const day = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].indexOf(event.time.slice(0,3)); const top = Math.max(0, Math.min(96, (eventMinutes(event.time) / (24 * 60)) * 100)); return <button key={event.id} className={`calendar-event ${selected.id === event.id ? 'selected' : ''}`} style={{left:`calc(${(day / 7) * 100}% + 4px)`,width:'calc(14.285% - 8px)',top:`${top}%`,borderColor:event.color}} onClick={() => { setSelected(event); setDetailsOpen(true); }}><span>{event.emoji}</span><b>{event.title}</b><small>{event.time.split('·')[1].trim()}</small></button>; })}</div>
+            <div className="calendar-events">{visibleEvents.map(event => { const day = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].indexOf(event.time.slice(0,3)); const top = Math.max(0, Math.min(96, (eventMinutes(event.time) / (24 * 60)) * 100)); return <button key={event.id} className={`calendar-event ${selected.id === event.id ? 'selected' : ''}`} style={{left:`calc(${(day / 7) * 100}% + 4px)`,width:'calc(14.285% - 8px)',top:`${top}%`,borderColor:event.color}} onClick={() => { setSelected(event); setDetailsOpen(true); }}><span>{event.emoji}</span><b>{event.title}</b><small>{event.time.split('·')[1].trim()}</small></button>; })}{questClaims.filter(claim => claim.status === 'Confirmed').map(claim => { const date = new Date(`${claim.date}T12:00:00`); const day = (date.getDay() + 6) % 7; const [hour, minute] = claim.time.split(':').map(Number); const top = Math.max(0, Math.min(96, ((hour * 60 + minute) / (24 * 60)) * 100)); return <button key={claim.id} className="calendar-event calendar-quest" style={{left:`calc(${(day / 7) * 100}% + 4px)`,width:'calc(14.285% - 8px)',top:`${top}%`,borderColor:claim.colour}} onClick={() => selectNav('quests')}><span>{claim.emoji}</span><b>{claim.title}</b><small>{claim.time} · Quest</small></button>; })}</div>
           </div>
         </div>}
         {view === 'map' && visibleEvents.length > 0 && <a className="google-badge" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selected.address)}`} target="_blank" rel="noreferrer">Open address in Google Maps ↗</a>}
         {view === 'map' && <div className="map-key"><span>✦</span> {visibleEvents.length} {filter.toLowerCase()} {visibleEvents.length === 1 ? 'pick' : 'picks'}</div>}
-        {visibleEvents.length === 0 && <div className="empty-state"><span>☆</span><h2>Your week is wide open.</h2><p>Save an event or join a crew, then it will appear here.</p><button onClick={() => selectNav('discover')}>Discover events</button></div>}
+        {visibleEvents.length === 0 && <div className="empty-state"><span>☆</span><h2>Your week is wide open.</h2><p>Save an event or join a crew, then it will appear here.</p><button onClick={() => selectNav('quests')}>Discover events</button></div>}
         {!detailsOpen && visibleEvents.length > 0 && <button className="show-details" onClick={() => setDetailsOpen(true)}>Show event details →</button>}
       </div>
 
       {detailsOpen && visibleEvents.length > 0 && <aside className="event-panel"><div className="panel-top"><span className="match">{matchScore}% YOUR VIBE</span><button className="close" aria-label="Close event details" onClick={() => setDetailsOpen(false)}>×</button></div><div className="event-art" style={{background: selected.color}}><span>{selected.emoji}</span><div className="art-sticker">TRY<br/>SOMETHING<br/><em>NEW</em></div></div><div className="event-content"><p className="host">{selected.host}</p>{selected.creatorRole && <div className={`publisher-badge ${selected.creatorRole}`}>{selected.creatorRole === 'organizer' ? '✓ Official USYD club event' : 'Student-led meetup'}{selected.capacity && <span> · {selected.capacity} places</span>}</div>}<h2>{selected.title}</h2><div className="meta"><span>◷ {selected.time}</span><span>⌖ {selected.place}</span></div><address className="event-address">{selected.address}</address><div className="tags">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div><blockquote><b>✦ Why this one?</b>{displayReason}</blockquote><div className="going"><div className="faces">{crewMembers.slice(0, 3).map(member => <i key={member.userId}>{member.anonymousAvatar}</i>)}</div><span><b>{crewMembers.length} crew members</b><br/>Identity stays private until individually revealed</span></div><div className="crew-preview" aria-label="Event crew members">{crewMembers.map(member => <span key={member.userId}>{member.anonymousAvatar} {member.anonymousAlias}{isCurrentUser(member) ? ' (you)' : <button onClick={() => openFriendChat(member)}>{friends.includes(member.userId) ? 'Message' : 'Chat'}</button>}</span>)}</div><div className="actions"><button className="primary" onClick={toggleCrew}>{joinedCrew ? 'Leave this crew' : 'Count me in →'}</button><button className={`save ${savedEventIds.includes(selected.id) ? 'saved' : ''}`} aria-label={savedEventIds.includes(selected.id) ? 'Remove event from My week' : 'Save event to My week'} aria-pressed={savedEventIds.includes(selected.id)} onClick={toggleSaved}>{savedEventIds.includes(selected.id) ? '♥' : '♡'}</button></div>{savedEventIds.includes(selected.id) && <p className="saved-note">Saved to My week</p>}{joinedCrew && <button className="open-crew-chat" onClick={() => setChatOpen(true)}>Open crew chat →</button>}{customEvents.some(event => event.id === selected.id) && <button className="delete-event" onClick={deleteEvent}>Delete event</button>}</div></aside>}
     </section>
+    {activeNav === 'discover' && detailsOpen && crewMembers.length > 0 && <section className="member-profile-strip" aria-label="View crew profiles"><span>Meet the crew</span>{crewMembers.map(member => <button key={member.userId} onClick={() => setViewedMember(isCurrentUser(member) && profile ? { ...member, displayName: profile.name, major: profile.major, semester: profile.semester, bio: profile.bio, interests: profile.interests, favouriteActivities: profile.favouriteActivities, profileAvatar: profile.avatar } : member)}><i><AvatarVisual value={isCurrentUser(member) && profile ? profile.avatar : member.profileAvatar ?? member.anonymousAvatar} /></i><b>{isCurrentUser(member) ? 'You' : member.anonymousAlias}</b><small>View interests</small></button>)}</section>}
+    {activeNav === 'discover' && visibleEvents.length > 0 && <button className="discover-quest-cta" onClick={() => { setQuestEventSeed(selected); selectNav('quests'); }}><span>{selected.emoji}</span><span><small>TURN THIS EVENT INTO A 24-HOUR QUEST</small><b>Go with a friend · earn 120 XP</b></span><i>Start quest →</i></button>}
 
     {chatOpen && joinedCrew && <section className="chat-card" aria-label="Event group chat"><header><div><b>{selected.title} crew</b><small><i/> {crewMembers.length} members · anonymous by default</small></div><button onClick={() => setChatOpen(false)} aria-label="Close messages">×</button></header><div className="chat-context"><span>{selected.emoji}</span><p><b>{selected.title}</b><br/>{selected.time}</p><button onClick={() => setChatOpen(false)}>View</button></div><div className="messages">{crewMessages.map(message => { const member = crewMembers.find(item => item.userId === message.userId); const mine = message.userId === 'current-user'; return <div className={mine ? 'outgoing' : 'incoming'} key={message.id}>{!mine && <span title={member?.anonymousAlias}>{member?.anonymousAvatar ?? '🎭'}</span>}<p>{message.content}<small>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small></p></div>; })}{crewMessages.length === 0 && <p className="empty-chat">Start the conversation with a quick emoji.</p>}</div><div className="quick-emojis" aria-label="Quick emoji replies">{['👋','🙋','✨','☕','👍','🎉'].map(emoji => <button key={emoji} onClick={() => send(emoji)}>{emoji}</button>)}</div><div className="composer"><input autoFocus value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && send()} placeholder="Type a message…"/><button className="send" onClick={() => send()} aria-label="Send message">↑</button></div></section>}
     {selectedFriend && <section className="chat-card direct-chat" aria-label={`Chat with ${selectedFriend.anonymousAlias}`}><header><div><b>{selectedFriend.anonymousAvatar} {selectedFriend.anonymousAlias}</b><small><i/> Friend · direct message</small></div><button onClick={() => setSelectedFriend(null)} aria-label="Close direct messages">×</button></header><div className="messages">{directThread.map(message => { const mine = message.userId === 'current-user'; return <div className={mine ? 'outgoing' : 'incoming'} key={message.id}>{!mine && <span>{selectedFriend.anonymousAvatar}</span>}<p>{message.content}<small>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small></p></div>; })}{directThread.length === 0 && <p className="empty-chat">You are friends now. Say hello!</p>}</div><div className="composer"><input autoFocus value={directDraft} onChange={event => setDirectDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && sendDirectMessage()} placeholder="Message your friend…"/><button className="send" onClick={sendDirectMessage} aria-label="Send direct message">↑</button></div></section>}
@@ -539,15 +605,24 @@ export default function Home() {
           <label>Account type<select required value={profileDraft.role} onChange={event => setProfileDraft({...profileDraft, role:event.target.value as Profile['role'], clubName:event.target.value === 'student' ? '' : profileDraft.clubName})}><option value="student">USYD student</option><option value="organizer">USYD club organizer</option></select></label>
           {profileDraft.role === 'organizer' && <label>Club or society name<input required value={profileDraft.clubName} onChange={event => setProfileDraft({...profileDraft, clubName:event.target.value})} placeholder="Sydney University Language Society" /></label>}
           <label>Full name<input required autoComplete="name" value={profileDraft.name} onChange={event => setProfileDraft({...profileDraft, name:event.target.value})} placeholder="Alex Morgan" /></label>
+          <fieldset className="avatar-picker"><legend>Profile avatar</legend><div className="avatar-preview"><AvatarVisual value={profileDraft.avatar} /></div><div className="avatar-options">{avatarOptions.map(avatar => <button type="button" key={avatar} className={profileDraft.avatar === avatar ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, avatar})}>{avatar}</button>)}</div><label className="avatar-upload">Upload my own photo<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => uploadAvatar(event.target.files?.[0])} /></label><small>JPG, PNG, WEBP or GIF · maximum 1 MB · stored only on this device</small></fieldset>
           <label>Email address<input required type="email" autoComplete="email" value={profileDraft.email} onChange={event => { setProfileDraft({...profileDraft, email:event.target.value}); setProfileError(''); }} placeholder="student@uni.sydney.edu.au" aria-invalid={Boolean(profileError)} aria-describedby="profile-email-help" /></label>
           <small id="profile-email-help" className={profileError ? 'profile-email-error' : 'profile-email-help'} role={profileError ? 'alert' : undefined}>{profileError || 'Only @uni.sydney.edu.au student email addresses can create a profile.'}</small>
           <div className="field-pair"><label>Study year<select required value={profileDraft.year} onChange={event => setProfileDraft({...profileDraft, year:event.target.value})}><option value="">Select year</option><option>1st year</option><option>2nd year</option><option>3rd year</option><option>4th year</option><option>Postgraduate</option></select></label><label>Semester<select required value={profileDraft.semester} onChange={event => setProfileDraft({...profileDraft, semester:event.target.value})}><option value="">Select semester</option><option>Semester 1</option><option>Semester 2</option><option>Summer term</option></select></label></div>
           <label>Major<input required value={profileDraft.major} onChange={event => setProfileDraft({...profileDraft, major:event.target.value})} placeholder="Computer Science" /></label>
           <label>Phone number<input required type="tel" autoComplete="tel" minLength={8} value={profileDraft.phone} onChange={event => setProfileDraft({...profileDraft, phone:event.target.value})} placeholder="04XX XXX XXX" /></label>
+          <label>About me<textarea required maxLength={240} value={profileDraft.bio} onChange={event => setProfileDraft({...profileDraft, bio:event.target.value})} placeholder="I’m always up for a coffee, a creative workshop or meeting people outside my course." /><small>{profileDraft.bio.length}/240</small></label>
+          <fieldset className="social-tag-picker"><legend>My interests <span>Choose up to 6</span></legend><div>{interestOptions.map(item => { const active = profileDraft.interests.includes(item); return <button type="button" key={item} className={active ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, interests: active ? profileDraft.interests.filter(value => value !== item) : profileDraft.interests.length < 6 ? [...profileDraft.interests, item] : profileDraft.interests})}>{active ? '✓ ' : '+ '}{item}</button>; })}</div></fieldset>
+          <fieldset className="social-tag-picker"><legend>Things I enjoy doing <span>Choose up to 6</span></legend><div>{activityOptions.map(item => { const active = profileDraft.favouriteActivities.includes(item); return <button type="button" key={item} className={active ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, favouriteActivities: active ? profileDraft.favouriteActivities.filter(value => value !== item) : profileDraft.favouriteActivities.length < 6 ? [...profileDraft.favouriteActivities, item] : profileDraft.favouriteActivities})}>{active ? '✓ ' : '+ '}{item}</button>; })}</div></fieldset>
           <button className="signup-submit" type="submit">{profile ? 'Save my profile' : 'Create my profile'} →</button>
           {profile && <button className="signup-cancel" type="button" onClick={() => setEditingProfile(false)}>Cancel</button>}
         </form>
       </section>
     </div>}
+    {viewedMember && <div className="signup-backdrop"><section className="social-profile-card" role="dialog" aria-modal="true" aria-labelledby="social-profile-name"><button className="signup-close" onClick={() => setViewedMember(null)} aria-label="Close social profile">×</button><div className="social-profile-hero"><span><AvatarVisual value={viewedMember.profileAvatar ?? viewedMember.anonymousAvatar} /></span><p className="eyebrow">SOCIAL PROFILE</p><h2 id="social-profile-name">{viewedMember.displayName ?? viewedMember.anonymousAlias}</h2><p>{viewedMember.major ?? 'USYD student'}{viewedMember.semester ? ` · ${viewedMember.semester}` : ''}</p></div><div className="social-profile-content"><h3>About me</h3><p>{viewedMember.bio || 'This student has not added an introduction yet.'}</p><h3>Interests</h3><div className="profile-chips">{viewedMember.interests?.length ? viewedMember.interests.map(item => <span key={item}>{item}</span>) : <small>No interests shared yet.</small>}</div><h3>Things I enjoy doing</h3><div className="profile-chips activities">{viewedMember.favouriteActivities?.length ? viewedMember.favouriteActivities.map(item => <span key={item}>{item}</span>) : <small>No favourite activities shared yet.</small>}</div>{!isCurrentUser(viewedMember) && <button className="signup-submit" onClick={() => { setViewedMember(null); openFriendChat(viewedMember); }}>{friends.includes(viewedMember.userId) ? 'Message' : 'Say hello'} →</button>}{isCurrentUser(viewedMember) && <button className="signup-submit" onClick={() => { setViewedMember(null); openProfile(); }}>Edit my profile →</button>}<small className="profile-privacy">Only details you choose to share appear here. Email and phone number stay private.</small></div></section></div>}
   </main>;
+}
+
+function AvatarVisual({ value }: { value: string }) {
+  return value.startsWith('data:image/') ? <img src={value} alt="Profile avatar" /> : <>{value}</>;
 }

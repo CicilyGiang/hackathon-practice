@@ -6,9 +6,9 @@ const avatars = ['🐨', '🦜', '🦔', '🐙'];
 
 export function createInitialSocialState(): SocialState {
   const members: CrewMember[] = [
-    { userId: 'demo-1', anonymousAlias: 'Curious Koala', anonymousAvatar: '🐨' },
-    { userId: 'demo-2', anonymousAlias: 'Sunny Lorikeet', anonymousAvatar: '🦜' },
-    { userId: 'demo-3', anonymousAlias: 'Cosmic Wombat', anonymousAvatar: '🦔' },
+    { userId: 'demo-1', anonymousAlias: 'Curious Koala', anonymousAvatar: '🐨', major: 'Architecture', semester: 'Semester 2', bio: 'I like making things, finding quiet cafés and meeting people through creative activities.', interests: ['Art', 'Coffee', 'Design'], favouriteActivities: ['Pottery', 'Gallery walks', 'Brunch'] },
+    { userId: 'demo-2', anonymousAlias: 'Sunny Lorikeet', anonymousAvatar: '🦜', major: 'Data Science', semester: 'Semester 1', bio: 'Always looking for a friendly study break, a new food spot or a beginner-friendly event.', interests: ['AI', 'Food', 'Music'], favouriteActivities: ['Dumpling nights', 'Live music', 'Study sessions'] },
+    { userId: 'demo-3', anonymousAlias: 'Cosmic Wombat', anonymousAvatar: '🦔', major: 'Physics', semester: 'Semester 2', bio: 'A curious night owl who enjoys outdoor conversations and discovering unusual campus events.', interests: ['Science', 'Outdoors', 'Culture'], favouriteActivities: ['Stargazing', 'Walking', 'Language exchange'] },
   ];
   return {
     membersByEvent: { 1: members, 2: members.slice(0, 2), 3: members, 4: members.slice(0, 1), 5: members.slice(0, 2) },
@@ -21,7 +21,10 @@ export function createInitialSocialState(): SocialState {
 export function loadSocialState(): SocialState {
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) as SocialState : createInitialSocialState();
+    if (!saved) return createInitialSocialState();
+    const state = JSON.parse(saved) as SocialState;
+    const demoMembers = createInitialSocialState().membersByEvent[1] ?? [];
+    return { ...state, membersByEvent: Object.fromEntries(Object.entries(state.membersByEvent ?? {}).map(([eventId, members]) => [eventId, members.map(member => ({ ...demoMembers.find(demo => demo.userId === member.userId), ...member }))])) };
   } catch {
     return createInitialSocialState();
   }
@@ -38,7 +41,7 @@ export function isCurrentUser(member: CrewMember) {
 export function joinEventCrew(
   state: SocialState,
   eventId: number,
-  profile?: { displayName: string; major: string; semester: string },
+  profile?: { displayName: string; major: string; semester: string; bio?: string; interests?: string[]; favouriteActivities?: string[]; profileAvatar?: string },
 ): SocialState {
   const current = state.membersByEvent[eventId] ?? [];
   if (current.some(isCurrentUser)) return state;

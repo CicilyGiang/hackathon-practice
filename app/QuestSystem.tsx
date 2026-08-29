@@ -3,19 +3,27 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import PremiumTools from './PremiumTools';
 
-type Quest = { id: string; title: string; emoji: string; difficulty: 'Easy' | 'Medium' | 'Hard'; description: string; duration: string; xp: number; points: number; spots: number; colour: string };
-type Claim = { id: string; questId: string; friend: string; date: string; time: string; venue: string; status: 'Confirmed' | 'Completed'; claimedOn: string };
+export type QuestEvent = { id: number; title: string; emoji: string; time: string; place: string; address: string; color: string; reason: string; tags: string[] };
+export type QuestClaim = { id: string; questId: string; title: string; emoji: string; colour: string; xp: number; points: number; friend: string; date: string; time: string; venue: string; status: 'Confirmed' | 'Completed' | 'Failed'; claimedOn: string; claimedAt: string; expiresAt: string; sourceEventId?: number };
+type Quest = { id: string; title: string; emoji: string; category: string; difficulty: 'Easy' | 'Medium' | 'Hard'; description: string; duration: string; xp: number; points: number; spots: number; colour: string; sourceEventId?: number; suggestedDate?: string; suggestedTime?: string; suggestedVenue?: string };
 type Transaction = { id: string; label: string; amount: number; kind: 'earn' | 'spend'; createdAt: string };
 type Pass = { id: string; title: string; hours: number; status: 'Ready' | 'Active' | 'Expired'; activatedAt?: string };
-type QuestState = { xp: number; points: number; claims: Claim[]; transactions: Transaction[]; passes: Pass[] };
+type QuestState = { xp: number; points: number; claims: QuestClaim[]; transactions: Transaction[]; passes: Pass[] };
+type Props = { recommendedEvents?: QuestEvent[]; initialEvent?: QuestEvent | null; onInitialEventUsed?: () => void; onOpenEvent?: (event: QuestEvent) => void; onShowMap?: (claim: QuestClaim) => void; onClaimsChange?: (claims: QuestClaim[]) => void };
 
 const quests: Quest[] = [
-  { id: 'coffee', title: 'Coffee Catch-up', emoji: '☕', difficulty: 'Easy', description: 'Turn “we should catch up” into a real coffee plan with one friend.', duration: '30–60 min', xp: 35, points: 15, spots: 42, colour: '#ff8b68' },
-  { id: 'study', title: 'Study Buddy', emoji: '📚', difficulty: 'Easy', description: 'Plan a focused study session, then take a proper break together.', duration: '45–90 min', xp: 40, points: 15, spots: 36, colour: '#6f91ff' },
-  { id: 'walk', title: 'Take a Walk', emoji: '🌿', difficulty: 'Easy', description: 'Leave the screen behind and take a twenty-minute walk with a friend.', duration: '20–45 min', xp: 30, points: 10, spots: 51, colour: '#47b98b' },
-  { id: 'new-place', title: 'Try Somewhere New', emoji: '🧭', difficulty: 'Medium', description: 'Invite two friends to explore a venue none of you has visited before.', duration: '1–2 hours', xp: 90, points: 40, spots: 18, colour: '#8b67ee' },
-  { id: 'event-buddy', title: 'Event Buddy', emoji: '🎟️', difficulty: 'Medium', description: 'Choose a Sidequest event and attend it with a friend.', duration: '1–3 hours', xp: 110, points: 45, spots: 12, colour: '#f0b844' },
-  { id: 'crew', title: 'Build a Crew', emoji: '✨', difficulty: 'Hard', description: 'Bring at least three people together for one shared public activity.', duration: '2+ hours', xp: 220, points: 90, spots: 6, colour: '#ee5ca8' },
+  { id: 'coffee', title: 'Coffee Catch-up', emoji: '☕', category: 'Connection', difficulty: 'Easy', description: 'Turn “we should catch up” into a real coffee plan with one friend.', duration: '30–60 min', xp: 35, points: 15, spots: 42, colour: '#ff8b68', suggestedVenue: 'Wentworth Building, Butlin Avenue, Darlington NSW 2008' },
+  { id: 'study', title: 'Study Buddy', emoji: '📚', category: 'Study', difficulty: 'Easy', description: 'Plan a focused study session, then take a proper break together.', duration: '45–90 min', xp: 40, points: 15, spots: 36, colour: '#6f91ff', suggestedVenue: 'Fisher Library, Eastern Avenue, Camperdown NSW 2006' },
+  { id: 'walk', title: 'Take a Walk', emoji: '🌿', category: 'Wellbeing', difficulty: 'Easy', description: 'Leave the screen behind and take a twenty-minute walk with a friend.', duration: '20–45 min', xp: 30, points: 10, spots: 51, colour: '#47b98b', suggestedVenue: 'Victoria Park, Parramatta Road, Camperdown NSW 2050' },
+  { id: 'lunch', title: 'Lunch Roulette', emoji: '🥪', category: 'Food', difficulty: 'Easy', description: 'Invite a classmate you know a little—but want to know better—to lunch.', duration: '30–60 min', xp: 45, points: 20, spots: 28, colour: '#f2b43f', suggestedVenue: 'Manning House, Manning Road, Camperdown NSW 2006' },
+  { id: 'screen-free', title: 'Screen-Free Hour', emoji: '📵', category: 'Wellbeing', difficulty: 'Medium', description: 'Put both phones away and spend one uninterrupted hour together.', duration: '60 min', xp: 75, points: 30, spots: 21, colour: '#45a6a2', suggestedVenue: 'The Quadrangle, University Place, Camperdown NSW 2006' },
+  { id: 'culture-swap', title: 'Culture Swap', emoji: '🌏', category: 'Culture', difficulty: 'Medium', description: 'Share a snack, phrase, song or tradition from each other’s cultures.', duration: '45–90 min', xp: 85, points: 35, spots: 19, colour: '#db6f9b', suggestedVenue: 'International Student Lounge, Wentworth Building, Darlington NSW 2008' },
+  { id: 'new-place', title: 'Try Somewhere New', emoji: '🧭', category: 'Explore', difficulty: 'Medium', description: 'Invite two friends to explore a venue none of you has visited before.', duration: '1–2 hours', xp: 90, points: 40, spots: 18, colour: '#8b67ee', suggestedVenue: 'Chau Chak Wing Museum, University Place, Camperdown NSW 2006' },
+  { id: 'club-dropin', title: 'Club Drop-in', emoji: '🎪', category: 'Community', difficulty: 'Medium', description: 'Visit a club activity with a friend and introduce yourselves to one member.', duration: '1–2 hours', xp: 100, points: 40, spots: 16, colour: '#ff765f', suggestedVenue: 'Holme Building, Science Road, Camperdown NSW 2006' },
+  { id: 'event-buddy', title: 'Event Buddy', emoji: '🎟️', category: 'Events', difficulty: 'Medium', description: 'Choose a Sidequest event and attend it with a friend.', duration: '1–3 hours', xp: 110, points: 45, spots: 12, colour: '#f0b844', suggestedVenue: 'Eastern Avenue Auditorium, Eastern Avenue, Camperdown NSW 2006' },
+  { id: 'welcome', title: 'Welcome a Newcomer', emoji: '👋', category: 'Community', difficulty: 'Hard', description: 'Invite a newer student into a group plan and make sure they feel included.', duration: '1–2 hours', xp: 160, points: 65, spots: 10, colour: '#43a8e8', suggestedVenue: 'Jane Foss Russell Building, City Road, Darlington NSW 2008' },
+  { id: 'crew', title: 'Build a Crew', emoji: '✨', category: 'Leadership', difficulty: 'Hard', description: 'Bring at least three people together for one shared public activity.', duration: '2+ hours', xp: 220, points: 90, spots: 6, colour: '#ee5ca8', suggestedVenue: 'Cadigal Green, Maze Crescent, Darlington NSW 2008' },
+  { id: 'weekend', title: 'Weekend Adventure', emoji: '🚆', category: 'Explore', difficulty: 'Hard', description: 'Plan a safe half-day outing with friends somewhere beyond your usual campus routine.', duration: '3+ hours', xp: 260, points: 110, spots: 4, colour: '#6657d9', suggestedVenue: 'Central Station, Eddy Avenue, Haymarket NSW 2000' },
 ];
 
 const rewards = [
@@ -23,11 +31,14 @@ const rewards = [
   { title: 'Weekend Premium', description: 'Unlock every Premium planning feature for the weekend.', cost: 180, hours: 72 },
   { title: '7-day Premium', description: 'A full week of advanced recommendations and crew tools.', cost: 450, hours: 168 },
 ];
-
+const STORAGE_KEY = 'sidequest-quest-state';
 const emptyState: QuestState = { xp: 0, points: 0, claims: [], transactions: [], passes: [] };
 const todayKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+const eventToQuest = (event: QuestEvent): Quest => ({ id: `event-${event.id}`, title: event.title, emoji: event.emoji, category: 'Recommended event', difficulty: 'Medium', description: `Attend ${event.title} with a friend. ${event.reason}`, duration: 'Event session', xp: 120, points: 50, spots: 20, colour: event.color, sourceEventId: event.id, suggestedTime: event.time, suggestedVenue: `${event.place}, ${event.address}` });
+const normaliseState = (saved: QuestState): QuestState => ({ ...emptyState, ...saved, claims: (saved.claims ?? []).map(claim => { const claimedAt = claim.claimedAt ?? new Date().toISOString(); return { ...claim, title: claim.title ?? quests.find(item => item.id === claim.questId)?.title ?? 'Social quest', emoji: claim.emoji ?? '✦', colour: claim.colour ?? '#7a61ff', xp: claim.xp ?? 0, points: claim.points ?? 0, status: claim.status ?? 'Confirmed', claimedAt, expiresAt: claim.expiresAt ?? new Date(new Date(claimedAt).getTime() + 86400000).toISOString() }; }) });
+const remaining = (expiresAt: string, now: number) => { const ms = Math.max(0, new Date(expiresAt).getTime() - now); const hours = Math.floor(ms / 3600000); const minutes = Math.floor((ms % 3600000) / 60000); return `${hours}h ${minutes}m left`; };
 
-export default function QuestSystem() {
+export default function QuestSystem({ recommendedEvents = [], initialEvent, onInitialEventUsed, onOpenEvent, onShowMap, onClaimsChange }: Props) {
   const [state, setState] = useState<QuestState>(emptyState);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<'board' | 'active' | 'premium' | 'rewards'>('board');
@@ -36,102 +47,40 @@ export default function QuestSystem() {
   const [notice, setNotice] = useState('');
   const [now, setNow] = useState(Date.now());
 
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('sidequest-quest-state') ?? 'null') as QuestState | null;
-      if (saved) setState(saved);
-    } catch { window.localStorage.removeItem('sidequest-quest-state'); }
-    setReady(true);
-  }, []);
+  useEffect(() => { try { const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null') as QuestState | null; if (saved) { const next = normaliseState(saved); setState(next); onClaimsChange?.(next.claims); } } catch { window.localStorage.removeItem(STORAGE_KEY); } setReady(true); }, []);
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 30000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => { if (!initialEvent) return; openEventQuest(initialEvent); onInitialEventUsed?.(); }, [initialEvent]);
+  useEffect(() => { if (!ready) return; const expiredIds = state.claims.filter(claim => claim.status === 'Confirmed' && new Date(claim.expiresAt).getTime() <= now).map(claim => claim.id); if (!expiredIds.length) return; persist({ ...state, claims: state.claims.map(claim => expiredIds.includes(claim.id) ? { ...claim, status: 'Failed' as const } : claim) }); setNotice(`${expiredIds.length} quest${expiredIds.length > 1 ? 's have' : ' has'} expired after 24 hours.`); }, [now, ready, state]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const update = (next: QuestState) => {
-    setState(next);
-    window.localStorage.setItem('sidequest-quest-state', JSON.stringify(next));
-  };
-
+  const persist = (next: QuestState) => { setState(next); window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); onClaimsChange?.(next.claims); };
   const claimedToday = state.claims.filter(claim => claim.claimedOn === todayKey()).length;
   const activeClaims = state.claims.filter(claim => claim.status === 'Confirmed');
   const levelThresholds = [0, 150, 400, 800, 1400, 2200, 3200, 4500, 6000, 8000];
   const level = Math.min(10, levelThresholds.filter(value => state.xp >= value).length);
-  const currentFloor = levelThresholds[level - 1];
-  const nextLevel = levelThresholds[level] ?? currentFloor;
+  const currentFloor = levelThresholds[level - 1]; const nextLevel = levelThresholds[level] ?? currentFloor;
   const progress = level === 10 ? 100 : Math.round(((state.xp - currentFloor) / (nextLevel - currentFloor)) * 100);
   const activePass = useMemo(() => state.passes.find(pass => pass.status === 'Active' && pass.activatedAt && now < new Date(pass.activatedAt).getTime() + pass.hours * 3600000), [now, state.passes]);
-  const dailyLimit = activePass ? 4 : 3;
-  const activeLimit = activePass ? 3 : 2;
+  const dailyLimit = activePass ? 4 : 3; const activeLimit = activePass ? 3 : 2;
 
-  const startPlan = (quest: Quest) => {
-    if (claimedToday >= dailyLimit) return setNotice(`You have used all ${dailyLimit} daily quest claims. Come back tomorrow.`);
-    if (activeClaims.length >= activeLimit) return setNotice('Complete an active quest before claiming another one.');
-    if (state.claims.some(claim => claim.questId === quest.id && claim.claimedOn === todayKey())) return setNotice('You already claimed this quest today.');
-    setNotice('');
-    setPlanning(quest);
-  };
-
-  const confirmPlan = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!planning) return;
-    const claim: Claim = { id: crypto.randomUUID(), questId: planning.id, friend: plan.friend.trim(), date: plan.date, time: plan.time, venue: plan.venue.trim(), status: 'Confirmed', claimedOn: todayKey() };
-    update({ ...state, claims: [claim, ...state.claims] });
-    setPlanning(null);
-    setPlan({ friend: '', date: '', time: '15:00', venue: '' });
-    setTab('active');
-    setNotice(`${planning.title} is confirmed. Your friend can now join the plan.`);
-  };
-
-  const completeQuest = (claim: Claim) => {
-    const quest = quests.find(item => item.id === claim.questId);
-    if (!quest || claim.status === 'Completed') return;
-    if (!window.confirm(`Confirm that you and ${claim.friend} completed “${quest.title}” together?`)) return;
-    const transaction: Transaction = { id: crypto.randomUUID(), label: `${quest.title} completed`, amount: quest.points, kind: 'earn', createdAt: new Date().toISOString() };
-    update({ ...state, xp: state.xp + quest.xp, points: state.points + quest.points, claims: state.claims.map(item => item.id === claim.id ? { ...item, status: 'Completed' as const } : item), transactions: [transaction, ...state.transactions] });
-    setNotice(`Quest complete — you earned ${quest.xp} XP and ${quest.points} points.`);
-  };
-
-  const redeem = (reward: typeof rewards[number]) => {
-    if (state.points < reward.cost) return setNotice(`You need ${reward.cost - state.points} more points for ${reward.title}.`);
-    if (!window.confirm(`Redeem ${reward.title} for ${reward.cost} Quest Points?`)) return;
-    const pass: Pass = { id: crypto.randomUUID(), title: reward.title, hours: reward.hours, status: 'Ready' };
-    const transaction: Transaction = { id: crypto.randomUUID(), label: `${reward.title} redeemed`, amount: reward.cost, kind: 'spend', createdAt: new Date().toISOString() };
-    update({ ...state, points: state.points - reward.cost, passes: [pass, ...state.passes], transactions: [transaction, ...state.transactions] });
-    setNotice(`${reward.title} is ready in your Premium wallet.`);
-  };
-
-  const activate = (pass: Pass) => {
-    if (activePass) return setNotice('A Premium pass is already active. Activate this one after it expires.');
-    update({ ...state, passes: state.passes.map(item => item.id === pass.id ? { ...item, status: 'Active' as const, activatedAt: new Date().toISOString() } : item) });
-    setNotice(`${pass.title} is now active.`);
-  };
+  const startPlan = (quest: Quest) => { if (claimedToday >= dailyLimit) return setNotice(`You have used all ${dailyLimit} daily quest claims. Come back tomorrow.`); if (activeClaims.length >= activeLimit) return setNotice('Complete an active quest before claiming another one.'); if (state.claims.some(claim => claim.questId === quest.id && claim.claimedOn === todayKey())) return setNotice('You already claimed this quest today.'); setNotice(''); setPlan({ friend: '', date: quest.suggestedDate ?? '', time: quest.suggestedTime?.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i) ? to24Hour(quest.suggestedTime) : '15:00', venue: quest.suggestedVenue ?? '' }); setPlanning(quest); };
+  const openEventQuest = (event: QuestEvent) => { setTab('board'); startPlan(eventToQuest(event)); };
+  const confirmPlan = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!planning) return; const claimedAt = new Date(); const claim: QuestClaim = { id: crypto.randomUUID(), questId: planning.id, title: planning.title, emoji: planning.emoji, colour: planning.colour, xp: planning.xp, points: planning.points, friend: plan.friend.trim(), date: plan.date, time: plan.time, venue: plan.venue.trim(), status: 'Confirmed', claimedOn: todayKey(), claimedAt: claimedAt.toISOString(), expiresAt: new Date(claimedAt.getTime() + 86400000).toISOString(), sourceEventId: planning.sourceEventId }; persist({ ...state, claims: [claim, ...state.claims] }); setPlanning(null); setTab('active'); setNotice(`${planning.title} is confirmed, added to My Calendar and expires in 24 hours.`); };
+  const completeQuest = (claim: QuestClaim) => { if (claim.status !== 'Confirmed') return; if (new Date(claim.expiresAt).getTime() <= Date.now()) { persist({ ...state, claims: state.claims.map(item => item.id === claim.id ? { ...item, status: 'Failed' as const } : item) }); return setNotice('This quest has expired and is now marked as failed.'); } if (!window.confirm(`Confirm that you and ${claim.friend} completed “${claim.title}” together?`)) return; const transaction: Transaction = { id: crypto.randomUUID(), label: `${claim.title} completed`, amount: claim.points, kind: 'earn', createdAt: new Date().toISOString() }; persist({ ...state, xp: state.xp + claim.xp, points: state.points + claim.points, claims: state.claims.map(item => item.id === claim.id ? { ...item, status: 'Completed' as const } : item), transactions: [transaction, ...state.transactions] }); setNotice(`Quest complete — you earned ${claim.xp} XP and ${claim.points} points.`); };
+  const deleteClaim = (claim: QuestClaim) => { if (!window.confirm(`Delete “${claim.title}” from My Quests and My Calendar?`)) return; persist({ ...state, claims: state.claims.filter(item => item.id !== claim.id) }); setNotice(`${claim.title} was deleted.`); };
+  const redeem = (reward: typeof rewards[number]) => { if (state.points < reward.cost) return setNotice(`You need ${reward.cost - state.points} more points for ${reward.title}.`); if (!window.confirm(`Redeem ${reward.title} for ${reward.cost} Quest Points?`)) return; const pass: Pass = { id: crypto.randomUUID(), title: reward.title, hours: reward.hours, status: 'Ready' }; const transaction: Transaction = { id: crypto.randomUUID(), label: `${reward.title} redeemed`, amount: reward.cost, kind: 'spend', createdAt: new Date().toISOString() }; persist({ ...state, points: state.points - reward.cost, passes: [pass, ...state.passes], transactions: [transaction, ...state.transactions] }); setNotice(`${reward.title} is ready in your Premium wallet.`); };
+  const activate = (pass: Pass) => { if (activePass) return setNotice('A Premium pass is already active. Activate this one after it expires.'); persist({ ...state, passes: state.passes.map(item => item.id === pass.id ? { ...item, status: 'Active' as const, activatedAt: new Date().toISOString() } : item) }); setNotice(`${pass.title} is now active.`); };
 
   if (!ready) return null;
   return <section className="quest-hub">
-    <div className="quest-hero">
-      <div><p className="eyebrow">SOCIAL MINING · REAL CONNECTIONS</p><h1>Make plans.<br/><em>Unlock more.</em></h1><p>Complete real-world social quests with friends. Earn points, level up and unlock Premium—without buying expensive rewards.</p></div>
-      <div className="quest-stats">
-        <div><span>LEVEL {level}</span><b>{['Starter','Connector','Explorer','Planner','Crew Builder','Adventurer','Guide','Quest Leader','Pathfinder','Legend'][level - 1]}</b><i><u style={{width:`${progress}%`}} /></i><small>{level === 10 ? 'Maximum level reached' : `${state.xp} / ${nextLevel} XP`}</small></div>
-        <div className="point-balance"><span>QUEST POINTS</span><b>{state.points}</b><small>Spend on Premium access</small></div>
-      </div>
-    </div>
-
-    <div className="quest-toolbar">
-      <div className="quest-tabs">{(['board','active','premium','rewards'] as const).map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item === 'board' ? 'Quest board' : item === 'active' ? `My quests (${activeClaims.length})` : item === 'premium' ? `Premium studio ${activePass ? '✦' : '◇'}` : 'Premium rewards'}</button>)}</div>
-      <div className="daily-meter"><b>{claimedToday} / {dailyLimit}</b><span>daily claims used</span><i><u style={{width:`${(claimedToday / dailyLimit) * 100}%`}} /></i></div>
-    </div>
+    <div className="quest-hero"><div><p className="eyebrow">SOCIAL MINING · REAL CONNECTIONS</p><h1>Make plans.<br/><em>Unlock more.</em></h1><p>Complete diverse real-world quests within 24 hours. Earn points, level up and unlock Premium.</p></div><div className="quest-stats"><div><span>LEVEL {level}</span><b>{['Starter','Connector','Explorer','Planner','Crew Builder','Adventurer','Guide','Quest Leader','Pathfinder','Legend'][level - 1]}</b><i><u style={{width:`${progress}%`}} /></i><small>{level === 10 ? 'Maximum level reached' : `${state.xp} / ${nextLevel} XP`}</small></div><div className="point-balance"><span>QUEST POINTS</span><b>{state.points}</b><small>Spend on Premium access</small></div></div></div>
+    <div className="quest-toolbar"><div className="quest-tabs">{(['board','active','premium','rewards'] as const).map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item === 'board' ? 'Quest board' : item === 'active' ? `My quests (${activeClaims.length})` : item === 'premium' ? `Premium studio ${activePass ? '✦' : '◇'}` : 'Premium rewards'}</button>)}</div><div className="daily-meter"><b>{claimedToday} / {dailyLimit}</b><span>daily claims used</span><i><u style={{width:`${(claimedToday / dailyLimit) * 100}%`}} /></i></div></div>
     {notice && <div className="quest-notice" role="status">✦ {notice}<button onClick={() => setNotice('')}>×</button></div>}
-
-    {tab === 'board' && <div className="quest-grid">{quests.map(quest => { const claimed = state.claims.some(claim => claim.questId === quest.id && claim.claimedOn === todayKey()); return <article className="quest-card" key={quest.id} style={{'--quest-colour':quest.colour} as React.CSSProperties}><div className="quest-card-art"><span>{quest.emoji}</span><small>{quest.spots} spots today</small></div><div className="quest-card-copy"><div><span className={`difficulty ${quest.difficulty.toLowerCase()}`}>{quest.difficulty}</span><span>{quest.duration}</span></div><h2>{quest.title}</h2><p>{quest.description}</p><footer><span><b>+{quest.xp}</b> XP</span><span><b>+{quest.points}</b> points</span><button disabled={claimed} onClick={() => startPlan(quest)}>{claimed ? 'Claimed today' : 'Claim quest →'}</button></footer></div></article>; })}</div>}
-
-    {tab === 'active' && <div className="quest-list">{state.claims.length === 0 ? <div className="quest-empty"><span>☆</span><h2>No quests yet.</h2><p>Claim a social quest and turn a loose idea into a real plan.</p><button onClick={() => setTab('board')}>Browse quests →</button></div> : state.claims.map(claim => { const quest = quests.find(item => item.id === claim.questId)!; return <article key={claim.id}><span className="quest-list-icon" style={{background:quest.colour}}>{quest.emoji}</span><div><small>{claim.status.toUpperCase()}</small><h3>{quest.title}</h3><p>With {claim.friend} · {claim.date} at {claim.time}<br/>{claim.venue}</p></div><div className="quest-list-reward"><b>+{quest.xp} XP</b><span>+{quest.points} points</span>{claim.status === 'Confirmed' ? <button onClick={() => completeQuest(claim)}>Confirm together</button> : <strong>✓ Reward earned</strong>}</div></article>; })}</div>}
-
+    {tab === 'board' && <><section className="quest-recommendations"><div><p className="eyebrow">DISCOVER → QUEST</p><h2>Recommended events worth turning into a plan</h2><p>Claim one with a friend and it will appear in My Calendar automatically.</p></div><div>{recommendedEvents.slice(0,3).map(event => <article key={event.id} style={{'--quest-colour':event.color} as React.CSSProperties}><span style={{background:event.color}}>{event.emoji}</span><div><small>{event.time}</small><h3>{event.title}</h3><p>{event.place}</p></div><footer><button onClick={() => onOpenEvent?.(event)}>View event</button><button onClick={() => openEventQuest(event)}>Make it a quest →</button></footer></article>)}</div></section><div className="quest-grid">{quests.map(quest => { const claimed = state.claims.some(claim => claim.questId === quest.id && claim.claimedOn === todayKey()); return <article className="quest-card" key={quest.id} style={{'--quest-colour':quest.colour} as React.CSSProperties}><div className="quest-card-art"><span>{quest.emoji}</span><small>{quest.spots} spots today</small></div><div className="quest-card-copy"><div><span className={`difficulty ${quest.difficulty.toLowerCase()}`}>{quest.difficulty}</span><span className="quest-category">{quest.category}</span><span>{quest.duration}</span></div><h2>{quest.title}</h2><p>{quest.description}</p><footer><span><b>+{quest.xp}</b> XP</span><span><b>+{quest.points}</b> points</span><button disabled={claimed} onClick={() => startPlan(quest)}>{claimed ? 'Claimed today' : 'Claim quest →'}</button></footer></div></article>; })}</div></>}
+    {tab === 'active' && <div className="quest-list">{state.claims.length === 0 ? <div className="quest-empty"><span>☆</span><h2>No quests yet.</h2><p>Claim a social quest and turn a loose idea into a real plan.</p><button onClick={() => setTab('board')}>Browse quests →</button></div> : state.claims.map(claim => <article key={claim.id} className={`quest-${claim.status.toLowerCase()}`}><span className="quest-list-icon" style={{background:claim.colour}}>{claim.emoji}</span><div><small>{claim.status.toUpperCase()} {claim.status === 'Confirmed' && `· ${remaining(claim.expiresAt, now)}`}</small><h3>{claim.title}</h3><p>With {claim.friend} · {claim.date} at {claim.time}<br/><b>Meeting address:</b> {claim.venue}</p><button className="quest-event-link" onClick={() => onShowMap?.(claim)}>View address on map →</button></div><div className="quest-list-reward"><b>+{claim.xp} XP</b><span>+{claim.points} points</span>{claim.status === 'Confirmed' ? <button onClick={() => completeQuest(claim)}>Confirm together</button> : claim.status === 'Completed' ? <strong>✓ Reward earned</strong> : <strong className="failed-label">24h expired</strong>}<button className="delete-quest" onClick={() => deleteClaim(claim)}>Delete</button></div></article>)}</div>}
     {tab === 'premium' && <PremiumTools active={Boolean(activePass)} onGetPremium={() => setTab('rewards')} />}
-
     {tab === 'rewards' && <div className="rewards-layout"><div><div className="rewards-heading"><p className="eyebrow">PREMIUM ACCESS SHOP</p><h2>Spend points on access,<br/>not expensive prizes.</h2></div><div className="reward-grid">{rewards.map(reward => <article key={reward.title}><span>✦</span><h3>{reward.title}</h3><p>{reward.description}</p><b>{reward.cost} points</b><button disabled={state.points < reward.cost} onClick={() => redeem(reward)}>{state.points >= reward.cost ? 'Redeem pass →' : `${reward.cost - state.points} more needed`}</button></article>)}</div></div><aside className="wallet"><p className="eyebrow">YOUR WALLET</p><b>{state.points}</b><span>available Quest Points</span>{activePass && <div className="active-premium"><small>ACTIVE NOW</small><strong>{activePass.title}</strong><span>Premium features are unlocked.</span></div>}<h3>Premium passes</h3>{state.passes.length === 0 ? <p>No passes yet. Complete quests to build your balance.</p> : state.passes.map(pass => <div className="wallet-pass" key={pass.id}><span><b>{pass.title}</b><small>{pass.status}</small></span>{pass.status === 'Ready' && <button onClick={() => activate(pass)}>Activate</button>}</div>)}<h3>Recent activity</h3>{state.transactions.slice(0,4).map(item => <div className="wallet-row" key={item.id}><span>{item.label}</span><b className={item.kind}>{item.kind === 'earn' ? '+' : '−'}{item.amount}</b></div>)}</aside></div>}
-
-    {planning && <div className="signup-backdrop"><section className="quest-plan" role="dialog" aria-modal="true" aria-labelledby="plan-title"><button className="signup-close" onClick={() => setPlanning(null)} aria-label="Close quest planner">×</button><span className="quest-plan-emoji" style={{background:planning.colour}}>{planning.emoji}</span><p className="eyebrow">PLAN THIS QUEST</p><h2 id="plan-title">{planning.title}</h2><p>{planning.description}</p><form onSubmit={confirmPlan}><label>Friend or crew name<input required value={plan.friend} onChange={event => setPlan({...plan,friend:event.target.value})} placeholder="Maya" /></label><div className="field-pair"><label>Date<input required type="date" min={todayKey()} value={plan.date} onChange={event => setPlan({...plan,date:event.target.value})} /></label><label>Start time<input required type="time" value={plan.time} onChange={event => setPlan({...plan,time:event.target.value})} /></label></div><label>Public venue<input required value={plan.venue} onChange={event => setPlan({...plan,venue:event.target.value})} placeholder="Courtyard Café, Camperdown" /></label><div className="plan-reward"><span>Completion reward</span><b>+{planning.xp} XP · +{planning.points} points</b></div><button className="signup-submit" type="submit">Confirm and invite →</button><small className="plan-safety">Meet in a public place. Both participants must confirm completion before rewards are issued.</small></form></section></div>}
+    {planning && <div className="signup-backdrop"><section className="quest-plan" role="dialog" aria-modal="true" aria-labelledby="plan-title"><button className="signup-close" onClick={() => setPlanning(null)} aria-label="Close quest planner">×</button><span className="quest-plan-emoji" style={{background:planning.colour}}>{planning.emoji}</span><p className="eyebrow">24-HOUR QUEST</p><h2 id="plan-title">{planning.title}</h2><p>{planning.description}</p><div className="expiry-warning">⏱ The quest expires 24 hours after you claim it. Unfinished quests are marked Failed.</div><form onSubmit={confirmPlan}><label>Friend or crew name<input required value={plan.friend} onChange={event => setPlan({...plan,friend:event.target.value})} placeholder="Maya" /></label><div className="field-pair"><label>Date<input required type="date" min={todayKey()} value={plan.date} onChange={event => setPlan({...plan,date:event.target.value})} /></label><label>Start time<input required type="time" value={plan.time} onChange={event => setPlan({...plan,time:event.target.value})} /></label></div><label>Public venue<input required value={plan.venue} onChange={event => setPlan({...plan,venue:event.target.value})} placeholder="Courtyard Café, Camperdown" /></label><div className="plan-reward"><span>Completion reward</span><b>+{planning.xp} XP · +{planning.points} points</b></div><button className="signup-submit" type="submit">Claim and add to calendar →</button><small className="plan-safety">Meet in a public place. Both participants must confirm completion before rewards are issued.</small></form></section></div>}
   </section>;
 }
+
+function to24Hour(value: string) { const match = value.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i); if (!match) return '15:00'; let hour = Number(match[1]); if (match[3].toUpperCase() === 'PM' && hour !== 12) hour += 12; if (match[3].toUpperCase() === 'AM' && hour === 12) hour = 0; return `${String(hour).padStart(2, '0')}:${match[2]}`; }

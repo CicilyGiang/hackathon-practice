@@ -5,6 +5,10 @@ export type CrewMember = {
   displayName?: string;
   major?: string;
   semester?: string;
+  bio?: string;
+  interests?: string[];
+  favouriteActivities?: string[];
+  profileAvatar?: string;
 };
 
 export type CrewMessage = {
