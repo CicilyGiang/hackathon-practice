@@ -1,0 +1,5 @@
+.language-swap{width:42px;height:42px;margin-bottom:2px;border:1px solid #cfc6ff;border-radius:50%;background:#f1eeff;color:#6048d9;font-size:22px;line-height:1;cursor:pointer;transition:transform .18s,background .18s}
+.language-swap:hover{background:#775cff;color:#fff;transform:rotate(180deg)}
+.language-swap:focus-visible{outline:3px solid #d7ff4f;outline-offset:2px}
+.language-swap:active{transform:rotate(180deg) scale(.92)}
+@media(max-width:600px){.language-swap{margin:0 auto;transform:rotate(90deg)}.language-swap:hover{transform:rotate(270deg)}}

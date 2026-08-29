@@ -12,6 +12,7 @@ import './friends-list.css';
 import './social-profile.css';
 import './schedule-gap.css';
 import './language-exchange.css';
+import './language-swap-fix.css';
 import 'leaflet/dist/leaflet.css';
 
 const geistSans = Geist({
