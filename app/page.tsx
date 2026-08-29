@@ -1,6 +1,8 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import { addEventMessage, createInitialSocialState, isCurrentUser, joinEventCrew, leaveEventCrew, loadSocialState, saveSocialState } from '../lib/social-storage';
+import type { SocialState } from '../types/social';
 
 type Profile = {
   email: string;
@@ -25,11 +27,10 @@ export default function Home() {
   const [selected, setSelected] = useState(events[0]);
   const [view, setView] = useState<'map' | 'week'>('map');
   const [filter, setFilter] = useState('For you');
-  const [saved, setSaved] = useState<number[]>([]);
+  const [social, setSocial] = useState<SocialState>(createInitialSocialState);
   const [chatOpen, setChatOpen] = useState(false);
   const [keyboardMode, setKeyboardMode] = useState(false);
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState(['👋', '🏺❓']);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile>(emptyProfile);
   const [profileReady, setProfileReady] = useState(false);
@@ -46,12 +47,21 @@ export default function Home() {
       } catch { window.localStorage.removeItem('sidequest-profile'); }
     }
     setProfileReady(true);
+    setSocial(loadSocialState());
   }, []);
 
   const send = (value = draft) => {
     if (!value.trim()) return;
-    setMessages(current => [...current, value]);
+    updateSocial(current => addEventMessage(current, selected.id, value.trim()));
     setDraft('');
+  };
+
+  const updateSocial = (update: (current: SocialState) => SocialState) => {
+    setSocial(current => {
+      const next = update(current);
+      saveSocialState(next);
+      return next;
+    });
   };
 
   const saveProfile = (event: FormEvent<HTMLFormElement>) => {
@@ -71,6 +81,18 @@ export default function Home() {
   };
 
   const profileOpen = profileReady && !signupDismissed && (!profile || editingProfile);
+  const crewMembers = social.membersByEvent[selected.id] ?? [];
+  const crewMessages = social.messagesByEvent[selected.id] ?? [];
+  const joinedCrew = crewMembers.some(isCurrentUser);
+
+  const toggleCrew = () => {
+    if (joinedCrew) {
+      updateSocial(current => leaveEventCrew(current, selected.id));
+      setChatOpen(false);
+      return;
+    }
+    updateSocial(current => joinEventCrew(current, selected.id, profile ? { displayName: profile.name, major: profile.major, semester: profile.semester } : undefined));
+  };
 
   return <main className="app-shell">
     <header className="topbar">
@@ -93,11 +115,11 @@ export default function Home() {
         <div className="map-key"><span>✦</span> 14 picks for you</div>
       </div>
 
-      <aside className="event-panel"><div className="panel-top"><span className="match">92% YOUR VIBE</span><button className="close" aria-label="Close event">×</button></div><div className="event-art" style={{background: selected.color}}><span>{selected.emoji}</span><div className="art-sticker">TRY<br/>SOMETHING<br/><em>NEW</em></div></div><div className="event-content"><p className="host">{selected.host}</p><h2>{selected.title}</h2><div className="meta"><span>◷ {selected.time}</span><span>⌖ {selected.place}</span></div><div className="tags">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div><blockquote><b>✦ Why this one?</b>{selected.reason}</blockquote><div className="going"><div className="faces"><i>🧑🏾</i><i>👩🏻</i><i>🧑🏼</i></div><span><b>18 people</b> are going<br/>Mostly outside {selected.faculty}</span></div><div className="actions"><button className="primary" onClick={() => setSaved(current => current.includes(selected.id) ? current.filter(id => id !== selected.id) : [...current, selected.id])}>{saved.includes(selected.id) ? '✓ Added to my week' : 'Count me in →'}</button><button className="save" aria-label="Save event">♡</button></div></div></aside>
+      <aside className="event-panel"><div className="panel-top"><span className="match">92% YOUR VIBE</span><button className="close" aria-label="Close event">×</button></div><div className="event-art" style={{background: selected.color}}><span>{selected.emoji}</span><div className="art-sticker">TRY<br/>SOMETHING<br/><em>NEW</em></div></div><div className="event-content"><p className="host">{selected.host}</p><h2>{selected.title}</h2><div className="meta"><span>◷ {selected.time}</span><span>⌖ {selected.place}</span></div><div className="tags">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div><blockquote><b>✦ Why this one?</b>{selected.reason}</blockquote><div className="going"><div className="faces">{crewMembers.slice(0, 3).map(member => <i key={member.userId}>{member.anonymousAvatar}</i>)}</div><span><b>{crewMembers.length} crew members</b><br/>Identity stays private until individually revealed</span></div><div className="crew-preview" aria-label="Event crew members">{crewMembers.map(member => <span key={member.userId}>{member.anonymousAvatar} {member.anonymousAlias}{isCurrentUser(member) ? ' (you)' : ''}</span>)}</div><div className="actions"><button className="primary" onClick={toggleCrew}>{joinedCrew ? 'Leave this crew' : 'Count me in →'}</button><button className="save" aria-label="Save event">♡</button></div>{joinedCrew && <button className="open-crew-chat" onClick={() => setChatOpen(true)}>Open crew chat →</button>}</div></aside>
     </section>
 
-    {chatOpen && <section className="chat-card" aria-label="Event group chat"><header><div><b>{selected.title} crew</b><small><i/> 12 going · 4 online</small></div><button onClick={() => setChatOpen(false)} aria-label="Close messages">×</button></header><div className="chat-context"><span>{selected.emoji}</span><p><b>{selected.title}</b><br/>{selected.time}</p><button>View</button></div><div className="messages"><div className="incoming"><span>👩🏻</span><p>First time coming solo — anyone want to meet at the front? <small>4:42 PM</small></p></div><div className="incoming"><span>🧑🏾</span><p>🙋🏾‍♂️☕➡️🏺 <small>4:43 PM</small></p></div>{messages.map((message, index) => <div className="outgoing" key={`${message}-${index}`}><p>{message}</p></div>)}</div><div className="quick-emojis" aria-label="Quick emoji replies">{['👋','🙋','✨','☕','👍','🎉'].map(emoji => <button key={emoji} onClick={() => send(emoji)}>{emoji}</button>)}</div><div className="composer">{keyboardMode ? <input autoFocus value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && send()} placeholder="Type a message…"/> : <div className="emoji-hint">Tap an emoji to reply</div>}<button className="mode-switch" onClick={() => setKeyboardMode(current => !current)} aria-label={keyboardMode ? 'Switch to emoji messaging' : 'Switch to keyboard messaging'}>{keyboardMode ? '😊' : '⌨️'}</button>{keyboardMode && <button className="send" onClick={() => send()}>↑</button>}</div></section>}
-    <button className="chat-launch" onClick={() => setChatOpen(current => !current)} aria-label="Open messages">💬<span>3</span></button>
+    {chatOpen && joinedCrew && <section className="chat-card" aria-label="Event group chat"><header><div><b>{selected.title} crew</b><small><i/> {crewMembers.length} members · anonymous by default</small></div><button onClick={() => setChatOpen(false)} aria-label="Close messages">×</button></header><div className="chat-context"><span>{selected.emoji}</span><p><b>{selected.title}</b><br/>{selected.time}</p><button onClick={() => setChatOpen(false)}>View</button></div><div className="messages">{crewMessages.map(message => { const member = crewMembers.find(item => item.userId === message.userId); const mine = message.userId === 'current-user'; return <div className={mine ? 'outgoing' : 'incoming'} key={message.id}>{!mine && <span title={member?.anonymousAlias}>{member?.anonymousAvatar ?? '🎭'}</span>}<p>{message.content}<small>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small></p></div>; })}{crewMessages.length === 0 && <p className="empty-chat">Start the conversation with a quick emoji.</p>}</div><div className="quick-emojis" aria-label="Quick emoji replies">{['👋','🙋','✨','☕','👍','🎉'].map(emoji => <button key={emoji} onClick={() => send(emoji)}>{emoji}</button>)}</div><div className="composer">{keyboardMode ? <input autoFocus value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && send()} placeholder="Type a message…"/> : <div className="emoji-hint">Chatting as your private crew alias</div>}<button className="mode-switch" onClick={() => setKeyboardMode(current => !current)} aria-label={keyboardMode ? 'Switch to emoji messaging' : 'Switch to keyboard messaging'}>{keyboardMode ? '😊' : '⌨️'}</button>{keyboardMode && <button className="send" onClick={() => send()}>↑</button>}</div></section>}
+    <button className={`chat-launch ${joinedCrew ? '' : 'locked'}`} onClick={() => joinedCrew && setChatOpen(current => !current)} aria-label={joinedCrew ? 'Open event crew messages' : 'Join this event crew to open messages'}>{joinedCrew ? '💬' : '🔒'}{joinedCrew && crewMessages.length > 0 && <span>{crewMessages.length}</span>}</button>
 
     {profileOpen && <div className="signup-backdrop" role="presentation">
       <section className="signup-card" role="dialog" aria-modal="true" aria-labelledby="signup-title">
