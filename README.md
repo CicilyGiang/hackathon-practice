@@ -1,6 +1,6 @@
 # Sidequest Campus Events
 
-A Vinext/Next.js campus discovery prototype with event matching, anonymous crews, local profile storage, and group and direct chat interactions. Creating a local event automatically adds its creator to that event's community crew. All demo profile, membership, and message data stays in the browser's local storage.
+A Vinext/Next.js campus discovery prototype with event matching, anonymous crews, local profile storage, and group and direct chat interactions. Signup supports USYD students and club organizers and accepts only addresses ending in `@uni.sydney.edu.au`. Students can publish informal meetups, while organizers publish under their club name with an official badge and capacity control. The Messages tab lists every joined crew group, offers direct anonymous chats with crew members, and supports silent group leaving without posting a departure event. The Language Exchange tab creates anonymous reciprocal language matches and local conversations for English, Mandarin, Indonesian, Vietnamese, and other languages. The profile menu includes a saved-event shortcut, and responsive mobile layouts retain access to every major tab through a fixed bottom navigation. All demo profile, role, language, membership, preference, and message data stays in the browser's local storage; signing out removes Sidequest's account-related local keys from that device.
 
 ## Start locally
 

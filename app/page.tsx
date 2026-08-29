@@ -6,6 +6,7 @@ import type { CrewMember, CrewMessage, SocialState } from '../types/social';
 import CampusMap from './CampusMap';
 import QuestSystem from './QuestSystem';
 import HangoutHub from './HangoutHub';
+import LanguageExchange from './LanguageExchange';
 
 type Profile = {
   email: string;
@@ -14,13 +15,19 @@ type Profile = {
   semester: string;
   major: string;
   phone: string;
+  role: 'student' | 'organizer';
+  clubName: string;
 };
 
-const emptyProfile: Profile = { email: '', name: '', year: '', semester: '', major: '', phone: '' };
+type MembershipPlan = 'Free' | 'Explorer' | 'Premium';
+
+const emptyProfile: Profile = { email: '', name: '', year: '', semester: '', major: '', phone: '', role: 'student', clubName: '' };
+const usydStudentEmail = /^[^@\s]+@uni\.sydney\.edu\.au$/i;
 
 type EventItem = {
   id: number; title: string; host: string; time: string; place: string; address: string;
   lat: number; lng: number; faculty: string; emoji: string; color: string; reason: string; tags: string[];
+  creatorRole?: 'student' | 'organizer'; capacity?: number;
 };
 
 const events: EventItem[] = [
@@ -51,21 +58,28 @@ export default function Home() {
   const [selected, setSelected] = useState(events[0]);
   const [view, setView] = useState<'map' | 'week'>('map');
   const [filter, setFilter] = useState('For you');
-  const [activeNav, setActiveNav] = useState<'discover' | 'week' | 'hangout' | 'quests' | 'messages'>('discover');
+  const [activeNav, setActiveNav] = useState<'discover' | 'week' | 'hangout' | 'quests' | 'language' | 'messages'>('discover');
   const [serendipity, setSerendipity] = useState(2);
   const [savedEventIds, setSavedEventIds] = useState<number[]>([]);
+  const [savedOnly, setSavedOnly] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [social, setSocial] = useState<SocialState>(createInitialSocialState);
   const [chatOpen, setChatOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile>(emptyProfile);
+  const [profileError, setProfileError] = useState('');
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [premiumOpen, setPremiumOpen] = useState(false);
+  const [membershipPlan, setMembershipPlan] = useState<MembershipPlan>('Free');
+  const [eventReminders, setEventReminders] = useState(true);
   const [profileReady, setProfileReady] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const [signupDismissed, setSignupDismissed] = useState(false);
   const [customEvents, setCustomEvents] = useState<EventItem[]>([]);
   const [addEventOpen, setAddEventOpen] = useState(false);
-  const [eventDraft, setEventDraft] = useState({ title: '', day: 'Mon', time: '12:00', place: '', address: '', emoji: '✨', tags: [] as string[] });
+  const [eventDraft, setEventDraft] = useState({ title: '', day: 'Mon', time: '12:00', place: '', address: '', emoji: '✨', tags: [] as string[], capacity: '30' });
   const [geocoding, setGeocoding] = useState(false);
   const [geocodeError, setGeocodeError] = useState('');
   const [friends, setFriends] = useState<string[]>([]);
@@ -81,6 +95,7 @@ export default function Home() {
   const visibleEvents = useMemo(() => {
     const today = new Intl.DateTimeFormat('en-AU', { weekday: 'short' }).format(new Date());
     const byFaculty = (list: EventItem[]) => facultyFilter === 'All faculties' ? list : list.filter(event => event.faculty === facultyFilter);
+    if (savedOnly) return allEvents.filter(event => savedEventIds.includes(event.id));
     if (activeNav === 'week') {
       return byFaculty(allEvents);
     }
@@ -97,18 +112,22 @@ export default function Home() {
         if (serendipity === 3) return byFaculty(allEvents.filter(event => !event.tags.includes('Beginner') || !event.tags.includes('Free')));
         return byFaculty(allEvents);
     }
-  }, [activeNav, allEvents, facultyFilter, filter, serendipity]);
+  }, [activeNav, allEvents, facultyFilter, filter, savedEventIds, savedOnly, serendipity]);
 
   useEffect(() => {
     const savedProfile = window.localStorage.getItem('sidequest-profile');
     if (savedProfile) {
       try {
-        const parsed = JSON.parse(savedProfile) as Profile;
-        setProfile(parsed);
-        setProfileDraft(parsed);
+        const parsed = JSON.parse(savedProfile) as Partial<Profile>;
+        const restored: Profile = { ...emptyProfile, ...parsed, role: parsed.role === 'organizer' ? 'organizer' : 'student' };
+        setProfile(restored);
+        setProfileDraft(restored);
       } catch { window.localStorage.removeItem('sidequest-profile'); }
     }
     setProfileReady(true);
+    const savedPlan = window.localStorage.getItem('sidequest-membership-plan');
+    if (savedPlan === 'Free' || savedPlan === 'Explorer' || savedPlan === 'Premium') setMembershipPlan(savedPlan);
+    setEventReminders(window.localStorage.getItem('sidequest-event-reminders') !== 'false');
     setSocial(loadSocialState());
     try {
       const saved = JSON.parse(window.localStorage.getItem('sidequest-saved-events') ?? '[]');
@@ -186,6 +205,11 @@ export default function Home() {
   const saveProfile = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const clean = Object.fromEntries(Object.entries(profileDraft).map(([key, value]) => [key, value.trim()])) as Profile;
+    if (!usydStudentEmail.test(clean.email)) {
+      setProfileError('Use your University of Sydney student email ending in @uni.sydney.edu.au.');
+      return;
+    }
+    setProfileError('');
     window.localStorage.setItem('sidequest-profile', JSON.stringify(clean));
     setProfile(clean);
     setProfileDraft(clean);
@@ -195,8 +219,34 @@ export default function Home() {
 
   const openProfile = () => {
     setProfileDraft(profile ?? emptyProfile);
+    setProfileError('');
     setEditingProfile(true);
     setSignupDismissed(false);
+  };
+
+  const selectMembershipPlan = (plan: MembershipPlan) => {
+    setMembershipPlan(plan);
+    window.localStorage.setItem('sidequest-membership-plan', plan);
+  };
+
+  const toggleEventReminders = () => {
+    setEventReminders(current => {
+      const next = !current;
+      window.localStorage.setItem('sidequest-event-reminders', String(next));
+      return next;
+    });
+  };
+
+  const signOut = () => {
+    if (!window.confirm('Sign out and remove this Sidequest account’s locally stored profile, chats and preferences from this device?')) return;
+    [
+      'sidequest-profile', 'sidequest-membership-plan', 'sidequest-event-reminders',
+      'sidequest-saved-events', 'sidequest-custom-events', 'sidequest-friends',
+      'sidequest-direct-messages', 'sidequest-read-messages', 'sidequest-social-state',
+      'sidequest-language-profile', 'sidequest-language-messages', 'sidequest-quest-state',
+      'sidequest-premium-prefs',
+    ].forEach(key => window.localStorage.removeItem(key));
+    window.location.reload();
   };
 
   const profileOpen = profileReady && !signupDismissed && (!profile || editingProfile);
@@ -207,6 +257,12 @@ export default function Home() {
   const crewMessages = social.messagesByEvent[selected.id] ?? [];
   const joinedCrew = crewMembers.some(isCurrentUser);
   const directThread = selectedFriend ? directMessages[selectedFriend.userId] ?? [] : [];
+  const joinedEvents = useMemo(() => allEvents.filter(event => (social.membersByEvent[event.id] ?? []).some(isCurrentUser)), [allEvents, social.membersByEvent]);
+  const anonymousCrewPeople = useMemo(() => {
+    const unique = new Map<string, CrewMember>();
+    joinedEvents.forEach(event => (social.membersByEvent[event.id] ?? []).filter(member => !isCurrentUser(member)).forEach(member => unique.set(member.userId, member)));
+    return Array.from(unique.values());
+  }, [joinedEvents, social.membersByEvent]);
   const incomingIds = [
     ...Object.values(social.messagesByEvent).flat().filter(message => message.userId !== 'current-user').map(message => message.id),
     ...Object.values(directMessages).flat().filter(message => message.userId !== 'current-user').map(message => message.id),
@@ -235,7 +291,19 @@ export default function Home() {
     updateSocial(current => joinEventCrew(current, selected.id, profile ? { displayName: profile.name, major: profile.major, semester: profile.semester } : undefined));
   };
 
-  const selectNav = (next: 'discover' | 'week' | 'hangout' | 'quests' | 'messages') => {
+  const openCrewFromMessages = (eventItem: EventItem) => {
+    setSelected(eventItem);
+    setSelectedFriend(null);
+    setChatOpen(true);
+  };
+
+  const leaveCrewSilently = (eventId: number) => {
+    updateSocial(current => leaveEventCrew(current, eventId));
+    if (selected.id === eventId) setChatOpen(false);
+  };
+
+  const selectNav = (next: 'discover' | 'week' | 'hangout' | 'quests' | 'language' | 'messages') => {
+    setSavedOnly(false);
     setActiveNav(next);
     setDetailsOpen(true);
     if (next === 'discover') {
@@ -246,22 +314,26 @@ export default function Home() {
       setView('week');
       return;
     }
-    if (next === 'quests' || next === 'hangout') {
+    if (next === 'messages') {
       setChatOpen(false);
       setSelectedFriend(null);
       return;
     }
-    const firstFriendId = friends[0];
-    const friend = Object.values(social.membersByEvent).flat().find(member => member.userId === firstFriendId);
-    if (friend) {
-      setSelectedFriend(friend);
+    if (next === 'language' || next === 'quests' || next === 'hangout') {
+      setChatOpen(false);
+      setSelectedFriend(null);
       return;
     }
-    const joinedEvent = allEvents.find(event => (social.membersByEvent[event.id] ?? []).some(isCurrentUser));
-    if (joinedEvent) {
-      setSelected(joinedEvent);
-      setChatOpen(true);
-    }
+  };
+
+  const openSavedEvents = () => {
+    setProfileMenuOpen(false);
+    setSavedOnly(true);
+    setActiveNav('week');
+    setView('map');
+    setDetailsOpen(true);
+    const firstSaved = allEvents.find(event => savedEventIds.includes(event.id));
+    if (firstSaved) setSelected(firstSaved);
   };
 
   const addFriend = (member: CrewMember) => {
@@ -333,11 +405,14 @@ export default function Home() {
     const displayTime = `${displayHour}:${minuteText} ${hour >= 12 ? 'PM' : 'AM'}`;
     const id = Date.now();
     const nextEvent: EventItem = {
-      id, title: eventDraft.title.trim(), host: profile?.name || 'Community host',
+      id, title: eventDraft.title.trim(), host: profile?.role === 'organizer' ? profile.clubName : profile?.name || 'Community host',
       time: `${eventDraft.day} · ${displayTime}`, place: eventDraft.place.trim(), address: eventDraft.address.trim(),
       lat: location.lat, lng: location.lng,
       faculty: 'Community', emoji: eventDraft.emoji || '✨', color: '#4f86f7',
-      reason: 'A new community-created event ready to bring people together.', tags: ['Community', ...eventDraft.tags],
+      reason: profile?.role === 'organizer' ? `An official ${profile.clubName} event open to the campus community.` : 'A student-created meetup ready to bring people together.',
+      tags: [profile?.role === 'organizer' ? 'Official club' : 'Student meetup', ...eventDraft.tags],
+      creatorRole: profile?.role ?? 'student',
+      capacity: profile?.role === 'organizer' ? Number(eventDraft.capacity) : undefined,
     };
     setCustomEvents(current => {
       const next = [...current, nextEvent];
@@ -355,7 +430,7 @@ export default function Home() {
     setActiveNav('week');
     setView('week');
     setChatOpen(true);
-    setEventDraft({ title: '', day: 'Mon', time: '12:00', place: '', address: '', emoji: '✨', tags: [] });
+    setEventDraft({ title: '', day: 'Mon', time: '12:00', place: '', address: '', emoji: '✨', tags: [], capacity: '30' });
   };
 
   const toggleSaved = () => {
@@ -393,19 +468,35 @@ export default function Home() {
     return hour * 60 + Number(match[2]);
   };
 
-  return <main className={`app-shell ${activeNav === 'quests' ? 'quest-active' : ''} ${activeNav === 'hangout' ? 'hangout-active' : ''}`}>
+  return <main className={`app-shell ${activeNav === 'quests' ? 'quest-active' : ''} ${activeNav === 'hangout' ? 'hangout-active' : ''} ${activeNav === 'language' ? 'language-active' : ''} ${activeNav === 'messages' ? 'messages-active' : ''}`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark">✦</span><span>sidequest</span></div>
-      <nav aria-label="Main navigation"><button className={activeNav === 'discover' ? 'nav-active' : ''} onClick={() => selectNav('discover')}>Discover</button><button className={activeNav === 'hangout' ? 'nav-active' : ''} onClick={() => selectNav('hangout')}>Who’s free?</button><button className={activeNav === 'week' ? 'nav-active' : ''} onClick={() => selectNav('week')}>My calendar</button><button className={activeNav === 'quests' ? 'nav-active' : ''} onClick={() => selectNav('quests')}>Quests</button><button className={activeNav === 'messages' ? 'nav-active' : ''} onClick={() => selectNav('messages')}>Messages {unreadCount > 0 && <span className="notification">{unreadCount}</span>}</button></nav>
-      <button className="profile" onClick={openProfile} aria-label="Open profile"><span>{profile?.name?.split(' ')[0] ?? 'Sign up'}</span><span className="avatar">{profile?.name?.charAt(0).toUpperCase() ?? '+'}</span></button>
+      <nav aria-label="Main navigation"><button className={activeNav === 'discover' ? 'nav-active' : ''} onClick={() => selectNav('discover')}>Discover</button><button className={activeNav === 'hangout' ? 'nav-active' : ''} onClick={() => selectNav('hangout')}>Who’s free?</button><button className={activeNav === 'week' ? 'nav-active' : ''} onClick={() => selectNav('week')}>My calendar</button><button className={activeNav === 'quests' ? 'nav-active' : ''} onClick={() => selectNav('quests')}>Quests</button><button className={activeNav === 'language' ? 'nav-active' : ''} onClick={() => selectNav('language')}>Language Exchange</button><button className={activeNav === 'messages' ? 'nav-active' : ''} onClick={() => selectNav('messages')}>Messages {unreadCount > 0 && <span className="notification">{unreadCount}</span>}</button></nav>
+      <div className="profile-area">
+        <button className="profile" onClick={() => profile ? setProfileMenuOpen(current => !current) : openProfile()} aria-label={profile ? 'Open account menu' : 'Sign up'} aria-expanded={profile ? profileMenuOpen : undefined}><span>{profile?.name?.split(' ')[0] ?? 'Sign up'}</span><span className="avatar">{profile?.name?.charAt(0).toUpperCase() ?? '+'}</span></button>
+        {profileMenuOpen && profile && <div className="profile-menu" role="menu">
+          <div className="profile-menu-header"><span className="avatar">{profile.name.charAt(0).toUpperCase()}</span><div><b>{profile.name}</b><small>{profile.email}</small><em>{membershipPlan} · {profile.role === 'organizer' ? profile.clubName || 'Club organizer' : 'Student'}</em></div></div>
+          <button role="menuitem" onClick={() => { setProfileMenuOpen(false); openProfile(); }}><span>👤</span><div><b>Account details</b><small>View or edit your profile</small></div></button>
+          <button role="menuitem" onClick={() => { setProfileMenuOpen(false); selectNav('messages'); }}><span>✉️</span><div><b>Inbox</b><small>{unreadCount ? `${unreadCount} unread messages` : 'Your chats and crews'}</small></div></button>
+          <button role="menuitem" onClick={openSavedEvents}><span>🔖</span><div><b>Saved events</b><small>{savedEventIds.length ? `${savedEventIds.length} saved ${savedEventIds.length === 1 ? 'event' : 'events'}` : 'Your bookmarks will appear here'}</small></div></button>
+          <button role="menuitem" onClick={() => { setProfileMenuOpen(false); setSettingsOpen(true); }}><span>⚙️</span><div><b>Settings</b><small>Manage local preferences</small></div></button>
+          <button className="premium-menu-item" role="menuitem" onClick={() => { setProfileMenuOpen(false); setPremiumOpen(true); }}><span>✦</span><div><b>Premium plans</b><small>Compare and select a plan</small></div></button>
+          <button className="sign-out-menu-item" role="menuitem" onClick={signOut}><span>↪</span><div><b>Sign out</b><small>Remove local account data from this device</small></div></button>
+        </div>}
+      </div>
     </header>
 
     {activeNav === 'quests' && <QuestSystem />}
     {activeNav === 'hangout' && <HangoutHub />}
+    {activeNav === 'language' && <LanguageExchange hasAccount={Boolean(profile)} onCreateAccount={openProfile} />}
+    {activeNav === 'messages' && <section className="messages-hub">
+      <header><div><p className="eyebrow">YOUR COMMUNITIES</p><h1>Messages,<br/><em>without the awkward exit.</em></h1><p>Open any joined event crew, chat privately with its anonymous members, or leave quietly at any time.</p></div><span>{joinedEvents.length} groups · {anonymousCrewPeople.length} people</span></header>
+      <div className="messages-hub-grid"><section className="group-inbox"><div className="inbox-heading"><div><h2>Group chats</h2><p>Events and clubs you have joined</p></div><span>{joinedEvents.length}</span></div>{joinedEvents.length === 0 ? <div className="inbox-empty"><span>💬</span><h3>No groups yet</h3><p>Join an event crew and its group chat will appear here automatically.</p><button onClick={() => selectNav('discover')}>Discover events →</button></div> : joinedEvents.map(eventItem => { const members = social.membersByEvent[eventItem.id] ?? []; const messages = social.messagesByEvent[eventItem.id] ?? []; const lastMessage = messages.at(-1); return <article className="group-inbox-row" key={eventItem.id}><button className="group-open" onClick={() => openCrewFromMessages(eventItem)}><span style={{background:eventItem.color}}>{eventItem.emoji}</span><div><b>{eventItem.title}</b><small>{members.length} members · {eventItem.time}</small><p>{lastMessage?.content ?? 'Your crew chat is ready.'}</p></div></button><button className="silent-leave" onClick={() => leaveCrewSilently(eventItem.id)} aria-label={`Leave ${eventItem.title} silently`}>Leave quietly</button></article>})}</section><section className="people-inbox"><div className="inbox-heading"><div><h2>People in your crews</h2><p>Direct messages stay anonymous</p></div><span>{anonymousCrewPeople.length}</span></div>{anonymousCrewPeople.length === 0 ? <div className="inbox-empty"><span>🎭</span><p>Anonymous crew members appear after you join an event.</p></div> : anonymousCrewPeople.map(member => { const thread = directMessages[member.userId] ?? []; return <button className="person-inbox-row" key={member.userId} onClick={() => openFriendChat(member)}><span>{member.anonymousAvatar}</span><div><b>{member.anonymousAlias}</b><small>{thread.at(-1)?.content ?? 'Start an anonymous conversation'}</small></div><i>{thread.length ? 'Message' : 'Say hi'}</i></button>})}<div className="silent-note">🫥 Leaving a group is private. No departure message is added to the chat.</div></section></div>
+    </section>}
 
-    <section className={`hero-row ${activeNav === 'week' ? 'week-hero' : ''}`}><div><p className="eyebrow">{activeNav === 'week' ? 'YOUR WEEK · HOUR BY HOUR' : 'YOUR CAMPUS, UNFILTERED'}</p><h1>{activeNav === 'week' ? <>Plan the moments<br/><em>that matter.</em></> : <>Find your next<br/><em>side quest.</em></>}</h1></div><div className="hero-copy"><p>{activeNav === 'week' ? 'Every campus event, placed at its exact start time.' : 'Events picked to pull you out of your usual orbit—just enough.'}</p><div className="serendipity"><span>Serendipity level</span><strong>{serendipityLabels[serendipity - 1]} ✨</strong><input aria-label="Serendipity level" type="range" min="1" max="3" value={serendipity} onChange={event => { setSerendipity(Number(event.target.value)); setFilter('For you'); setActiveNav('discover'); }} /></div></div></section>
+    <section className={`hero-row ${activeNav === 'week' ? 'week-hero' : ''}`}><div><p className="eyebrow">{savedOnly ? 'YOUR BOOKMARKED EVENTS' : activeNav === 'week' ? 'YOUR WEEK · HOUR BY HOUR' : 'YOUR CAMPUS, UNFILTERED'}</p><h1>{savedOnly ? <>Saved for<br/><em>later.</em></> : activeNav === 'week' ? <>Plan the moments<br/><em>that matter.</em></> : <>Find your next<br/><em>side quest.</em></>}</h1></div><div className="hero-copy"><p>{savedOnly ? 'Every event you bookmarked, together in one easy place.' : activeNav === 'week' ? 'Every campus event, placed at its exact start time.' : 'Events picked to pull you out of your usual orbit—just enough.'}</p>{!savedOnly && <div className="serendipity"><span>Serendipity level</span><strong>{serendipityLabels[serendipity - 1]} ✨</strong><input aria-label="Serendipity level" type="range" min="1" max="3" value={serendipity} onChange={event => { setSerendipity(Number(event.target.value)); setFilter('For you'); setActiveNav('discover'); }} /></div>}</div></section>
 
-    <section className="controls"><div className="filter-area">{activeNav === 'discover' && <div className="filters" aria-label="Event filters">{eventFilters.map(item => <button key={item} aria-pressed={filter === item} onClick={() => { setFilter(item); setDetailsOpen(true); }} className={filter === item ? 'active' : ''}>{item}{item === 'For you' && ' ✦'}</button>)}</div>}{activeNav === 'discover' && faculties.length > 1 && <div className="filters faculty-filters" aria-label="Filter by faculty">{['All faculties', ...faculties].map(item => <button key={item} aria-pressed={facultyFilter === item} onClick={() => { setFacultyFilter(item); setDetailsOpen(true); }} className={facultyFilter === item ? 'active' : ''}>{item}</button>)}</div>}<p className="filter-summary" aria-live="polite"><b>{visibleEvents.length} {visibleEvents.length === 1 ? 'event' : 'events'}</b> · {activeNav === 'week' ? 'All events scheduled for this week.' : filterDescriptions[filter]}</p></div><div className="control-actions"><button className="add-event-button" onClick={() => setAddEventOpen(true)}>+ Add event</button><div className="view-toggle"><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}>⌖ Map</button><button className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>▦ Week</button></div></div></section>
+    <section className="controls"><div className="filter-area">{activeNav === 'discover' && <div className="filters" aria-label="Event filters">{eventFilters.map(item => <button key={item} aria-pressed={filter === item} onClick={() => { setFilter(item); setDetailsOpen(true); }} className={filter === item ? 'active' : ''}>{item}{item === 'For you' && ' ✦'}</button>)}</div>}{activeNav === 'discover' && faculties.length > 1 && <div className="filters faculty-filters" aria-label="Filter by faculty">{['All faculties', ...faculties].map(item => <button key={item} aria-pressed={facultyFilter === item} onClick={() => { setFacultyFilter(item); setDetailsOpen(true); }} className={facultyFilter === item ? 'active' : ''}>{item}</button>)}</div>}<p className="filter-summary" aria-live="polite"><b>{visibleEvents.length} {visibleEvents.length === 1 ? 'event' : 'events'}</b> · {savedOnly ? 'Bookmarked events saved on this device.' : activeNav === 'week' ? 'All events scheduled for this week.' : filterDescriptions[filter]}</p></div><div className="control-actions">{savedOnly && <button className="add-event-button saved-back" onClick={() => selectNav('discover')}>← Discover more</button>}{!savedOnly && profile && <button className="add-event-button" onClick={() => setAddEventOpen(true)}>+ {profile.role === 'organizer' ? 'Add club event' : 'Add meetup'}</button>}<div className="view-toggle"><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}>⌖ Map</button><button className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>▦ Week</button></div></div></section>
 
     <section className={`workspace ${!detailsOpen || visibleEvents.length === 0 ? 'no-details' : ''}`}>
       <div className={`map google-map ${view === 'week' ? 'calendar-mode' : ''}`}>
@@ -423,22 +514,33 @@ export default function Home() {
         {!detailsOpen && visibleEvents.length > 0 && <button className="show-details" onClick={() => setDetailsOpen(true)}>Show event details →</button>}
       </div>
 
-      {detailsOpen && visibleEvents.length > 0 && <aside className="event-panel"><div className="panel-top"><span className="match">{matchScore}% YOUR VIBE</span><button className="close" aria-label="Close event details" onClick={() => setDetailsOpen(false)}>×</button></div><div className="event-art" style={{background: selected.color}}><span>{selected.emoji}</span><div className="art-sticker">TRY<br/>SOMETHING<br/><em>NEW</em></div></div><div className="event-content"><p className="host">{selected.host}</p><h2>{selected.title}</h2><div className="meta"><span>◷ {selected.time}</span><span>⌖ {selected.place}</span></div><address className="event-address">{selected.address}</address><div className="tags">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div><blockquote><b>✦ Why this one?</b>{displayReason}</blockquote><div className="going"><div className="faces">{crewMembers.slice(0, 3).map(member => <i key={member.userId}>{member.anonymousAvatar}</i>)}</div><span><b>{crewMembers.length} crew members</b><br/>Identity stays private until individually revealed</span></div><div className="crew-preview" aria-label="Event crew members">{crewMembers.map(member => <span key={member.userId}>{member.anonymousAvatar} {member.anonymousAlias}{isCurrentUser(member) ? ' (you)' : <button onClick={() => openFriendChat(member)}>{friends.includes(member.userId) ? 'Message' : 'Chat'}</button>}</span>)}</div><div className="actions"><button className="primary" onClick={toggleCrew}>{joinedCrew ? 'Leave this crew' : 'Count me in →'}</button><button className={`save ${savedEventIds.includes(selected.id) ? 'saved' : ''}`} aria-label={savedEventIds.includes(selected.id) ? 'Remove event from My week' : 'Save event to My week'} aria-pressed={savedEventIds.includes(selected.id)} onClick={toggleSaved}>{savedEventIds.includes(selected.id) ? '♥' : '♡'}</button></div>{savedEventIds.includes(selected.id) && <p className="saved-note">Saved to My week</p>}{joinedCrew && <button className="open-crew-chat" onClick={() => setChatOpen(true)}>Open crew chat →</button>}{customEvents.some(event => event.id === selected.id) && <button className="delete-event" onClick={deleteEvent}>Delete event</button>}</div></aside>}
+      {detailsOpen && visibleEvents.length > 0 && <aside className="event-panel"><div className="panel-top"><span className="match">{matchScore}% YOUR VIBE</span><button className="close" aria-label="Close event details" onClick={() => setDetailsOpen(false)}>×</button></div><div className="event-art" style={{background: selected.color}}><span>{selected.emoji}</span><div className="art-sticker">TRY<br/>SOMETHING<br/><em>NEW</em></div></div><div className="event-content"><p className="host">{selected.host}</p>{selected.creatorRole && <div className={`publisher-badge ${selected.creatorRole}`}>{selected.creatorRole === 'organizer' ? '✓ Official USYD club event' : 'Student-led meetup'}{selected.capacity && <span> · {selected.capacity} places</span>}</div>}<h2>{selected.title}</h2><div className="meta"><span>◷ {selected.time}</span><span>⌖ {selected.place}</span></div><address className="event-address">{selected.address}</address><div className="tags">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div><blockquote><b>✦ Why this one?</b>{displayReason}</blockquote><div className="going"><div className="faces">{crewMembers.slice(0, 3).map(member => <i key={member.userId}>{member.anonymousAvatar}</i>)}</div><span><b>{crewMembers.length} crew members</b><br/>Identity stays private until individually revealed</span></div><div className="crew-preview" aria-label="Event crew members">{crewMembers.map(member => <span key={member.userId}>{member.anonymousAvatar} {member.anonymousAlias}{isCurrentUser(member) ? ' (you)' : <button onClick={() => openFriendChat(member)}>{friends.includes(member.userId) ? 'Message' : 'Chat'}</button>}</span>)}</div><div className="actions"><button className="primary" onClick={toggleCrew}>{joinedCrew ? 'Leave this crew' : 'Count me in →'}</button><button className={`save ${savedEventIds.includes(selected.id) ? 'saved' : ''}`} aria-label={savedEventIds.includes(selected.id) ? 'Remove event from My week' : 'Save event to My week'} aria-pressed={savedEventIds.includes(selected.id)} onClick={toggleSaved}>{savedEventIds.includes(selected.id) ? '♥' : '♡'}</button></div>{savedEventIds.includes(selected.id) && <p className="saved-note">Saved to My week</p>}{joinedCrew && <button className="open-crew-chat" onClick={() => setChatOpen(true)}>Open crew chat →</button>}{customEvents.some(event => event.id === selected.id) && <button className="delete-event" onClick={deleteEvent}>Delete event</button>}</div></aside>}
     </section>
 
     {chatOpen && joinedCrew && <section className="chat-card" aria-label="Event group chat"><header><div><b>{selected.title} crew</b><small><i/> {crewMembers.length} members · anonymous by default</small></div><button onClick={() => setChatOpen(false)} aria-label="Close messages">×</button></header><div className="chat-context"><span>{selected.emoji}</span><p><b>{selected.title}</b><br/>{selected.time}</p><button onClick={() => setChatOpen(false)}>View</button></div><div className="messages">{crewMessages.map(message => { const member = crewMembers.find(item => item.userId === message.userId); const mine = message.userId === 'current-user'; return <div className={mine ? 'outgoing' : 'incoming'} key={message.id}>{!mine && <span title={member?.anonymousAlias}>{member?.anonymousAvatar ?? '🎭'}</span>}<p>{message.content}<small>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small></p></div>; })}{crewMessages.length === 0 && <p className="empty-chat">Start the conversation with a quick emoji.</p>}</div><div className="quick-emojis" aria-label="Quick emoji replies">{['👋','🙋','✨','☕','👍','🎉'].map(emoji => <button key={emoji} onClick={() => send(emoji)}>{emoji}</button>)}</div><div className="composer"><input autoFocus value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && send()} placeholder="Type a message…"/><button className="send" onClick={() => send()} aria-label="Send message">↑</button></div></section>}
     {selectedFriend && <section className="chat-card direct-chat" aria-label={`Chat with ${selectedFriend.anonymousAlias}`}><header><div><b>{selectedFriend.anonymousAvatar} {selectedFriend.anonymousAlias}</b><small><i/> Friend · direct message</small></div><button onClick={() => setSelectedFriend(null)} aria-label="Close direct messages">×</button></header><div className="messages">{directThread.map(message => { const mine = message.userId === 'current-user'; return <div className={mine ? 'outgoing' : 'incoming'} key={message.id}>{!mine && <span>{selectedFriend.anonymousAvatar}</span>}<p>{message.content}<small>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small></p></div>; })}{directThread.length === 0 && <p className="empty-chat">You are friends now. Say hello!</p>}</div><div className="composer"><input autoFocus value={directDraft} onChange={event => setDirectDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && sendDirectMessage()} placeholder="Message your friend…"/><button className="send" onClick={sendDirectMessage} aria-label="Send direct message">↑</button></div></section>}
     <button className={`chat-launch ${joinedCrew ? '' : 'locked'}`} onClick={() => joinedCrew && setChatOpen(current => !current)} aria-label={joinedCrew ? 'Open event crew messages' : 'Join this event crew to open messages'}>{joinedCrew ? '💬' : '🔒'}{unreadCount > 0 && <span>{unreadCount}</span>}</button>
 
-    {addEventOpen && <div className="signup-backdrop"><section className="add-event-card" role="dialog" aria-modal="true" aria-labelledby="add-event-title"><button className="signup-close" onClick={() => setAddEventOpen(false)} aria-label="Close add event form">×</button><p className="eyebrow">COMMUNITY CALENDAR</p><h2 id="add-event-title">Add a new event</h2><p>Publish an activity to this week’s calendar and campus map.</p><form onSubmit={createEvent}><label>Event title<input required value={eventDraft.title} onChange={event => setEventDraft({...eventDraft,title:event.target.value})} placeholder="Morning coffee walk" /></label><div className="field-pair"><label>Day<select value={eventDraft.day} onChange={event => setEventDraft({...eventDraft,day:event.target.value})}>{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => <option key={day}>{day}</option>)}</select></label><label>Start time<input required type="time" value={eventDraft.time} onChange={event => setEventDraft({...eventDraft,time:event.target.value})} /></label></div><div className="field-pair"><label>Venue<input required value={eventDraft.place} onChange={event => setEventDraft({...eventDraft,place:event.target.value})} placeholder="Main Quad" /></label><label>Emoji<input required maxLength={4} value={eventDraft.emoji} onChange={event => setEventDraft({...eventDraft,emoji:event.target.value})} /></label></div><fieldset className="tag-picker"><legend>Event tags <span>Choose one or more</span></legend><div>{['Free','Beginner','Social','Creative','Food','Sport','Tech','Outdoors'].map(tag => { const active = eventDraft.tags.includes(tag); return <button key={tag} type="button" className={active ? 'selected' : ''} aria-pressed={active} onClick={() => { setEventDraft({...eventDraft,tags: active ? eventDraft.tags.filter(item => item !== tag) : [...eventDraft.tags, tag]}); setGeocodeError(''); }}>{active ? '✓ ' : '+ '}{tag}</button>; })}</div></fieldset><label>Full address<input required value={eventDraft.address} onChange={event => { setEventDraft({...eventDraft,address:event.target.value}); setGeocodeError(''); }} placeholder="39 Belmore Street, Burwood NSW 2134" /></label><small className={`geocode-status ${geocodeError ? 'error' : ''}`} aria-live="polite">{geocodeError || 'The pin will be placed at the verified address.'}</small><button className="signup-submit" type="submit" disabled={geocoding}>{geocoding ? 'Locating address…' : 'Add to calendar →'}</button></form></section></div>}
+    {addEventOpen && <div className="signup-backdrop"><section className="add-event-card" role="dialog" aria-modal="true" aria-labelledby="add-event-title"><button className="signup-close" onClick={() => setAddEventOpen(false)} aria-label="Close add event form">×</button><p className="eyebrow">{profile?.role === 'organizer' ? 'OFFICIAL CLUB EVENT' : 'STUDENT-LED MEETUP'}</p><h2 id="add-event-title">{profile?.role === 'organizer' ? `Publish for ${profile.clubName}` : 'Start a casual meetup'}</h2><p>{profile?.role === 'organizer' ? 'Your club name and official organizer badge will be shown.' : 'Create a low-pressure activity for other verified students.'}</p><form onSubmit={createEvent}><label>Event title<input required value={eventDraft.title} onChange={event => setEventDraft({...eventDraft,title:event.target.value})} placeholder="Morning coffee walk" /></label><div className="field-pair"><label>Day<select value={eventDraft.day} onChange={event => setEventDraft({...eventDraft,day:event.target.value})}>{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => <option key={day}>{day}</option>)}</select></label><label>Start time<input required type="time" value={eventDraft.time} onChange={event => setEventDraft({...eventDraft,time:event.target.value})} /></label></div><div className="field-pair"><label>Venue<input required value={eventDraft.place} onChange={event => setEventDraft({...eventDraft,place:event.target.value})} placeholder="Main Quad" /></label><label>Emoji<input required maxLength={4} value={eventDraft.emoji} onChange={event => setEventDraft({...eventDraft,emoji:event.target.value})} /></label></div>{profile?.role === 'organizer' && <label>Event capacity<input required type="number" min="2" max="1000" value={eventDraft.capacity} onChange={event => setEventDraft({...eventDraft,capacity:event.target.value})} /></label>}<fieldset className="tag-picker"><legend>Event tags <span>Choose one or more</span></legend><div>{['Free','Beginner','Social','Creative','Food','Sport','Tech','Outdoors'].map(tag => { const active = eventDraft.tags.includes(tag); return <button key={tag} type="button" className={active ? 'selected' : ''} aria-pressed={active} onClick={() => { setEventDraft({...eventDraft,tags: active ? eventDraft.tags.filter(item => item !== tag) : [...eventDraft.tags, tag]}); setGeocodeError(''); }}>{active ? '✓ ' : '+ '}{tag}</button>; })}</div></fieldset><label>Full address<input required value={eventDraft.address} onChange={event => { setEventDraft({...eventDraft,address:event.target.value}); setGeocodeError(''); }} placeholder="39 Belmore Street, Burwood NSW 2134" /></label><small className={`geocode-status ${geocodeError ? 'error' : ''}`} aria-live="polite">{geocodeError || 'The pin will be placed at the verified address.'}</small><button className="signup-submit" type="submit" disabled={geocoding}>{geocoding ? 'Locating address…' : profile?.role === 'organizer' ? 'Publish official event →' : 'Publish meetup →'}</button></form></section></div>}
+
+    {settingsOpen && <div className="signup-backdrop"><section className="account-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><button className="signup-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button><p className="eyebrow">ACCOUNT</p><h2 id="settings-title">Settings</h2><p>Your preferences are stored only on this device.</p><label className="setting-row"><span><b>Event reminders</b><small>Show local reminders for events in your calendar</small></span><input type="checkbox" checked={eventReminders} onChange={toggleEventReminders} /></label><div className="local-data-note">🔒 Profile, plan and message preferences use browser local storage.</div></section></div>}
+
+    {premiumOpen && <div className="signup-backdrop"><section className="premium-dialog" role="dialog" aria-modal="true" aria-labelledby="premium-title"><button className="signup-close" onClick={() => setPremiumOpen(false)} aria-label="Close premium plans">×</button><p className="eyebrow">SIDEQUEST MEMBERSHIP</p><h2 id="premium-title">Choose your campus adventure.</h2><p>Select a demo plan. No payment is taken.</p><div className="plan-grid">{([
+      { name: 'Free' as MembershipPlan, price: '$0', description: 'Discover events, join crews and chat.' },
+      { name: 'Explorer' as MembershipPlan, price: '$4.99', description: 'Extra quests, filters and monthly rewards.' },
+      { name: 'Premium' as MembershipPlan, price: '$9.99', description: 'All perks, priority drops and exclusive quests.' },
+    ]).map(plan => <button key={plan.name} className={membershipPlan === plan.name ? 'selected' : ''} onClick={() => selectMembershipPlan(plan.name)} aria-pressed={membershipPlan === plan.name}><span>{membershipPlan === plan.name ? '✓ Selected' : 'Select plan'}</span><b>{plan.name}</b><strong>{plan.price}<small>/month</small></strong><p>{plan.description}</p></button>)}</div><button className="signup-submit" onClick={() => setPremiumOpen(false)}>Done</button></section></div>}
 
     {profileOpen && <div className="signup-backdrop" role="presentation">
       <section className="signup-card" role="dialog" aria-modal="true" aria-labelledby="signup-title">
         <button className="signup-close" type="button" onClick={() => { setEditingProfile(false); setSignupDismissed(true); }} aria-label="Close signup and view events">×</button>
-        <div className="signup-intro"><span className="brand-mark">✦</span><p className="eyebrow">YOUR SIDEQUEST PROFILE</p><h2 id="signup-title">{profile ? 'Update your details' : 'Let’s find your people.'}</h2><p>Tell us a little about you so recommendations can reach beyond your usual campus bubble.</p><div className="privacy-note">🔒 Stored on this device for the hackathon demo.</div></div>
+        <div className="signup-intro"><span className="brand-mark">✦</span><p className="eyebrow">YOUR SIDEQUEST PROFILE</p><h2 id="signup-title">{profile ? 'Update your details' : 'Choose how you’ll join.'}</h2><p>Students discover communities. Club organizers can also publish official club events.</p><div className="privacy-note">🔒 Stored on this device for the hackathon demo.</div></div>
         <form onSubmit={saveProfile}>
+          <label>Account type<select required value={profileDraft.role} onChange={event => setProfileDraft({...profileDraft, role:event.target.value as Profile['role'], clubName:event.target.value === 'student' ? '' : profileDraft.clubName})}><option value="student">USYD student</option><option value="organizer">USYD club organizer</option></select></label>
+          {profileDraft.role === 'organizer' && <label>Club or society name<input required value={profileDraft.clubName} onChange={event => setProfileDraft({...profileDraft, clubName:event.target.value})} placeholder="Sydney University Language Society" /></label>}
           <label>Full name<input required autoComplete="name" value={profileDraft.name} onChange={event => setProfileDraft({...profileDraft, name:event.target.value})} placeholder="Alex Morgan" /></label>
-          <label>Email address<input required type="email" autoComplete="email" value={profileDraft.email} onChange={event => setProfileDraft({...profileDraft, email:event.target.value})} placeholder="alex@uni.edu.au" /></label>
+          <label>Email address<input required type="email" autoComplete="email" value={profileDraft.email} onChange={event => { setProfileDraft({...profileDraft, email:event.target.value}); setProfileError(''); }} placeholder="student@uni.sydney.edu.au" aria-invalid={Boolean(profileError)} aria-describedby="profile-email-help" /></label>
+          <small id="profile-email-help" className={profileError ? 'profile-email-error' : 'profile-email-help'} role={profileError ? 'alert' : undefined}>{profileError || 'Only @uni.sydney.edu.au student email addresses can create a profile.'}</small>
           <div className="field-pair"><label>Study year<select required value={profileDraft.year} onChange={event => setProfileDraft({...profileDraft, year:event.target.value})}><option value="">Select year</option><option>1st year</option><option>2nd year</option><option>3rd year</option><option>4th year</option><option>Postgraduate</option></select></label><label>Semester<select required value={profileDraft.semester} onChange={event => setProfileDraft({...profileDraft, semester:event.target.value})}><option value="">Select semester</option><option>Semester 1</option><option>Semester 2</option><option>Summer term</option></select></label></div>
           <label>Major<input required value={profileDraft.major} onChange={event => setProfileDraft({...profileDraft, major:event.target.value})} placeholder="Computer Science" /></label>
           <label>Phone number<input required type="tel" autoComplete="tel" minLength={8} value={profileDraft.phone} onChange={event => setProfileDraft({...profileDraft, phone:event.target.value})} placeholder="04XX XXX XXX" /></label>

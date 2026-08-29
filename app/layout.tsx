@@ -9,6 +9,7 @@ import './hangout.css';
 import './modal-layer.css';
 import './friends-list.css';
 import './schedule-gap.css';
+import './language-exchange.css';
 import 'leaflet/dist/leaflet.css';
 
 const geistSans = Geist({
