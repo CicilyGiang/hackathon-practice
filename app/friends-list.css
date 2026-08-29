@@ -1,0 +1,149 @@
+.friend-action-buttons {
+  display: flex;
+  gap: 7px;
+}
+
+.friend-action-buttons button {
+  position: relative;
+  border: 1px solid #d4cfc5;
+  border-radius: 20px;
+  background: #fff;
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.friend-action-buttons button:last-child {
+  border-color: #775cff;
+  background: #775cff;
+  color: #fff;
+}
+
+.friend-action-buttons i {
+  position: absolute;
+  right: -5px;
+  top: -6px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #f5f0e7;
+  border-radius: 50%;
+  background: #ff6857;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.friends-list-modal {
+  position: relative;
+  width: min(590px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  border-radius: 23px;
+  background: #fff;
+  padding: 32px;
+}
+
+.friends-list-modal h2 {
+  margin: 6px 0 8px;
+  font-size: 31px;
+}
+
+.friends-list-modal > p:not(.eyebrow) {
+  margin: 0 0 20px;
+  color: #717671;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.friends-list-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.friends-list-grid article,
+.shared-club-list article {
+  display: grid;
+  grid-template-columns: 42px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #e2ddd4;
+  border-radius: 13px;
+  background: #fbfaf7;
+}
+
+.friends-list-grid article > span,
+.shared-club-list article > span {
+  font-size: 27px;
+}
+
+.friends-list-grid b,
+.friends-list-grid small,
+.shared-club-list b,
+.shared-club-list small {
+  display: block;
+  font-size: 9px;
+}
+
+.friends-list-grid small,
+.shared-club-list small {
+  margin-top: 3px;
+  color: #777c78;
+  font-size: 7px;
+}
+
+.friends-list-grid i,
+.shared-club-list i {
+  color: #858a86;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.friends-list-grid i.online {
+  color: #25815d;
+}
+
+.friends-list-grid button {
+  border: 0;
+  border-radius: 8px;
+  background: #18201c;
+  color: #fff;
+  padding: 7px 9px;
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.shared-club-list {
+  margin-top: 22px;
+}
+
+.shared-club-list h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+}
+
+.shared-club-list article {
+  grid-template-columns: 42px 1fr auto;
+}
+
+.add-from-list {
+  width: 100%;
+  margin-top: 18px;
+  border: 0;
+  border-radius: 11px;
+  background: #775cff;
+  color: #fff;
+  padding: 12px;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+@media (max-width: 600px) {
+  .friend-action-buttons { width: 100%; }
+  .friend-action-buttons button { flex: 1; }
+  .friends-list-modal { padding: 25px 20px; }
+  .friends-list-grid article { grid-template-columns: 38px 1fr auto; }
+  .friends-list-grid article button { grid-column: 1 / -1; width: 100%; }
+}

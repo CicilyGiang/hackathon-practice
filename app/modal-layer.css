@@ -1,0 +1,24 @@
+/* Leaflet panes use z-index values up to 700, so every app modal must sit above them. */
+.signup-backdrop {
+  z-index: 3000;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.signup-backdrop > section {
+  position: relative;
+  z-index: 3001;
+  margin: auto;
+}
+
+.signup-backdrop::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(24, 32, 28, .15);
+}
+
+.hangout-chat {
+  z-index: 3100;
+}

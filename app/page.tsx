@@ -5,6 +5,7 @@ import { addEventMessage, addIncomingEventMessage, createInitialSocialState, isC
 import type { CrewMember, CrewMessage, SocialState } from '../types/social';
 import CampusMap from './CampusMap';
 import QuestSystem from './QuestSystem';
+import HangoutHub from './HangoutHub';
 
 type Profile = {
   email: string;
@@ -50,7 +51,7 @@ export default function Home() {
   const [selected, setSelected] = useState(events[0]);
   const [view, setView] = useState<'map' | 'week'>('map');
   const [filter, setFilter] = useState('For you');
-  const [activeNav, setActiveNav] = useState<'discover' | 'week' | 'quests' | 'messages'>('discover');
+  const [activeNav, setActiveNav] = useState<'discover' | 'week' | 'hangout' | 'quests' | 'messages'>('discover');
   const [serendipity, setSerendipity] = useState(2);
   const [savedEventIds, setSavedEventIds] = useState<number[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(true);
@@ -234,7 +235,7 @@ export default function Home() {
     updateSocial(current => joinEventCrew(current, selected.id, profile ? { displayName: profile.name, major: profile.major, semester: profile.semester } : undefined));
   };
 
-  const selectNav = (next: 'discover' | 'week' | 'quests' | 'messages') => {
+  const selectNav = (next: 'discover' | 'week' | 'hangout' | 'quests' | 'messages') => {
     setActiveNav(next);
     setDetailsOpen(true);
     if (next === 'discover') {
@@ -245,7 +246,7 @@ export default function Home() {
       setView('week');
       return;
     }
-    if (next === 'quests') {
+    if (next === 'quests' || next === 'hangout') {
       setChatOpen(false);
       setSelectedFriend(null);
       return;
@@ -386,14 +387,15 @@ export default function Home() {
     return hour * 60 + Number(match[2]);
   };
 
-  return <main className={`app-shell ${activeNav === 'quests' ? 'quest-active' : ''}`}>
+  return <main className={`app-shell ${activeNav === 'quests' ? 'quest-active' : ''} ${activeNav === 'hangout' ? 'hangout-active' : ''}`}>
     <header className="topbar">
       <div className="brand"><span className="brand-mark">✦</span><span>sidequest</span></div>
-      <nav aria-label="Main navigation"><button className={activeNav === 'discover' ? 'nav-active' : ''} onClick={() => selectNav('discover')}>Discover</button><button className={activeNav === 'week' ? 'nav-active' : ''} onClick={() => selectNav('week')}>My calendar</button><button className={activeNav === 'quests' ? 'nav-active' : ''} onClick={() => selectNav('quests')}>Quests</button><button className={activeNav === 'messages' ? 'nav-active' : ''} onClick={() => selectNav('messages')}>Messages {unreadCount > 0 && <span className="notification">{unreadCount}</span>}</button></nav>
+      <nav aria-label="Main navigation"><button className={activeNav === 'discover' ? 'nav-active' : ''} onClick={() => selectNav('discover')}>Discover</button><button className={activeNav === 'hangout' ? 'nav-active' : ''} onClick={() => selectNav('hangout')}>Who’s free?</button><button className={activeNav === 'week' ? 'nav-active' : ''} onClick={() => selectNav('week')}>My calendar</button><button className={activeNav === 'quests' ? 'nav-active' : ''} onClick={() => selectNav('quests')}>Quests</button><button className={activeNav === 'messages' ? 'nav-active' : ''} onClick={() => selectNav('messages')}>Messages {unreadCount > 0 && <span className="notification">{unreadCount}</span>}</button></nav>
       <button className="profile" onClick={openProfile} aria-label="Open profile"><span>{profile?.name?.split(' ')[0] ?? 'Sign up'}</span><span className="avatar">{profile?.name?.charAt(0).toUpperCase() ?? '+'}</span></button>
     </header>
 
     {activeNav === 'quests' && <QuestSystem />}
+    {activeNav === 'hangout' && <HangoutHub />}
 
     <section className={`hero-row ${activeNav === 'week' ? 'week-hero' : ''}`}><div><p className="eyebrow">{activeNav === 'week' ? 'YOUR WEEK · HOUR BY HOUR' : 'YOUR CAMPUS, UNFILTERED'}</p><h1>{activeNav === 'week' ? <>Plan the moments<br/><em>that matter.</em></> : <>Find your next<br/><em>side quest.</em></>}</h1></div><div className="hero-copy"><p>{activeNav === 'week' ? 'Every campus event, placed at its exact start time.' : 'Events picked to pull you out of your usual orbit—just enough.'}</p><div className="serendipity"><span>Serendipity level</span><strong>{serendipityLabels[serendipity - 1]} ✨</strong><input aria-label="Serendipity level" type="range" min="1" max="3" value={serendipity} onChange={event => { setSerendipity(Number(event.target.value)); setFilter('For you'); setActiveNav('discover'); }} /></div></div></section>
 

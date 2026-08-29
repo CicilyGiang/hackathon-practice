@@ -5,6 +5,9 @@ import './features.css';
 import './quests.css';
 import './premium.css';
 import './premium-locked.css';
+import './hangout.css';
+import './modal-layer.css';
+import './friends-list.css';
 import 'leaflet/dist/leaflet.css';
 
 const geistSans = Geist({
