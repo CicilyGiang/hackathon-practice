@@ -1,0 +1,20 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# generated builds
+/.next/
+/.vinext/
+/dist/
+/out/
+/.wrangler/
+
+# local environment and logs
+.env*
+*.log
+next-env.d.ts
+
+# system files
+.DS_Store
+Thumbs.db
