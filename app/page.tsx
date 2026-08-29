@@ -71,27 +71,31 @@ export default function Home() {
   const [directMessages, setDirectMessages] = useState<Record<string, CrewMessage[]>>({});
   const [directDraft, setDirectDraft] = useState('');
   const [readMessageIds, setReadMessageIds] = useState<string[]>([]);
+  const [facultyFilter, setFacultyFilter] = useState('All faculties');
+  const [aiInsights, setAiInsights] = useState<Record<number, { reason: string; matchScore: number }>>({});
   const allEvents = useMemo(() => [...events, ...customEvents], [customEvents]);
+  const faculties = useMemo(() => Array.from(new Set(allEvents.map(event => event.faculty))), [allEvents]);
 
   const visibleEvents = useMemo(() => {
     const today = new Intl.DateTimeFormat('en-AU', { weekday: 'short' }).format(new Date());
+    const byFaculty = (list: EventItem[]) => facultyFilter === 'All faculties' ? list : list.filter(event => event.faculty === facultyFilter);
     if (activeNav === 'week') {
-      return allEvents;
+      return byFaculty(allEvents);
     }
     switch (filter) {
-      case 'Today': return allEvents.filter(event => event.time.startsWith(today));
-      case 'Free': return allEvents.filter(event => event.tags.includes('Free'));
-      case 'Beginner-friendly': return allEvents.filter(event => event.tags.includes('Beginner'));
-      case 'This week': return allEvents;
+      case 'Today': return byFaculty(allEvents.filter(event => event.time.startsWith(today)));
+      case 'Free': return byFaculty(allEvents.filter(event => event.tags.includes('Free')));
+      case 'Beginner-friendly': return byFaculty(allEvents.filter(event => event.tags.includes('Beginner')));
+      case 'This week': return byFaculty(allEvents);
       default:
         if (eventFilters.includes(filter) && filter !== 'For you') {
-          return allEvents.filter(event => event.tags.includes(filter));
+          return byFaculty(allEvents.filter(event => event.tags.includes(filter)));
         }
-        if (serendipity === 1) return allEvents.filter(event => event.tags.includes('Beginner'));
-        if (serendipity === 3) return allEvents.filter(event => !event.tags.includes('Beginner') || !event.tags.includes('Free'));
-        return allEvents;
+        if (serendipity === 1) return byFaculty(allEvents.filter(event => event.tags.includes('Beginner')));
+        if (serendipity === 3) return byFaculty(allEvents.filter(event => !event.tags.includes('Beginner') || !event.tags.includes('Free')));
+        return byFaculty(allEvents);
     }
-  }, [activeNav, allEvents, filter, serendipity]);
+  }, [activeNav, allEvents, facultyFilter, filter, serendipity]);
 
   useEffect(() => {
     const savedProfile = window.localStorage.getItem('sidequest-profile');
@@ -130,6 +134,34 @@ export default function Home() {
     }
   }, [selected.id, visibleEvents]);
 
+  useEffect(() => {
+    // Ask the server to generate a live, personalised "why this one" reason
+    // and match score per event. This replaces the old hardcoded per-event
+    // text and the flat "92% YOUR VIBE" badge with something that actually
+    // reflects the signed-in student's profile. The route degrades to a
+    // heuristic score server-side if no AI key is configured, so this never
+    // needs its own error UI — worst case, the static fallback reason shows.
+    if (!profileReady || allEvents.length === 0) return;
+    let cancelled = false;
+    fetch('/api/recommend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        events: allEvents.map(event => ({
+          id: event.id, title: event.title, faculty: event.faculty, tags: event.tags, time: event.time, fallbackReason: event.reason,
+        })),
+        profile: profile ? { major: profile.major, year: profile.year } : undefined,
+      }),
+    })
+      .then(response => response.ok ? response.json() : null)
+      .then((data: { insights?: { id: number; reason: string; matchScore: number }[] } | null) => {
+        if (cancelled || !data?.insights) return;
+        setAiInsights(Object.fromEntries(data.insights.map(insight => [insight.id, { reason: insight.reason, matchScore: insight.matchScore }])));
+      })
+      .catch(() => { /* keep whatever insights (or fallbacks) we already have */ });
+    return () => { cancelled = true; };
+  }, [allEvents, profile, profileReady]);
+
   const send = (value = draft) => {
     if (!value.trim()) return;
     const eventId = selected.id;
@@ -166,6 +198,9 @@ export default function Home() {
   };
 
   const profileOpen = profileReady && !signupDismissed && (!profile || editingProfile);
+  const selectedInsight = aiInsights[selected.id];
+  const displayReason = selectedInsight?.reason ?? selected.reason;
+  const matchScore = selectedInsight?.matchScore ?? 92;
   const crewMembers = social.membersByEvent[selected.id] ?? [];
   const crewMessages = social.messagesByEvent[selected.id] ?? [];
   const joinedCrew = crewMembers.some(isCurrentUser);
@@ -354,7 +389,7 @@ export default function Home() {
 
     <section className={`hero-row ${activeNav === 'week' ? 'week-hero' : ''}`}><div><p className="eyebrow">{activeNav === 'week' ? 'YOUR WEEK · HOUR BY HOUR' : 'YOUR CAMPUS, UNFILTERED'}</p><h1>{activeNav === 'week' ? <>Plan the moments<br/><em>that matter.</em></> : <>Find your next<br/><em>side quest.</em></>}</h1></div><div className="hero-copy"><p>{activeNav === 'week' ? 'Every campus event, placed at its exact start time.' : 'Events picked to pull you out of your usual orbit—just enough.'}</p><div className="serendipity"><span>Serendipity level</span><strong>{serendipityLabels[serendipity - 1]} ✨</strong><input aria-label="Serendipity level" type="range" min="1" max="3" value={serendipity} onChange={event => { setSerendipity(Number(event.target.value)); setFilter('For you'); setActiveNav('discover'); }} /></div></div></section>
 
-    <section className="controls"><div className="filter-area">{activeNav === 'discover' && <div className="filters" aria-label="Event filters">{eventFilters.map(item => <button key={item} aria-pressed={filter === item} onClick={() => { setFilter(item); setDetailsOpen(true); }} className={filter === item ? 'active' : ''}>{item}{item === 'For you' && ' ✦'}</button>)}</div>}<p className="filter-summary" aria-live="polite"><b>{visibleEvents.length} {visibleEvents.length === 1 ? 'event' : 'events'}</b> · {activeNav === 'week' ? 'All events scheduled for this week.' : filterDescriptions[filter]}</p></div><div className="control-actions"><button className="add-event-button" onClick={() => setAddEventOpen(true)}>+ Add event</button><div className="view-toggle"><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}>⌖ Map</button><button className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>▦ Week</button></div></div></section>
+    <section className="controls"><div className="filter-area">{activeNav === 'discover' && <div className="filters" aria-label="Event filters">{eventFilters.map(item => <button key={item} aria-pressed={filter === item} onClick={() => { setFilter(item); setDetailsOpen(true); }} className={filter === item ? 'active' : ''}>{item}{item === 'For you' && ' ✦'}</button>)}</div>}{activeNav === 'discover' && faculties.length > 1 && <div className="filters faculty-filters" aria-label="Filter by faculty">{['All faculties', ...faculties].map(item => <button key={item} aria-pressed={facultyFilter === item} onClick={() => { setFacultyFilter(item); setDetailsOpen(true); }} className={facultyFilter === item ? 'active' : ''}>{item}</button>)}</div>}<p className="filter-summary" aria-live="polite"><b>{visibleEvents.length} {visibleEvents.length === 1 ? 'event' : 'events'}</b> · {activeNav === 'week' ? 'All events scheduled for this week.' : filterDescriptions[filter]}</p></div><div className="control-actions"><button className="add-event-button" onClick={() => setAddEventOpen(true)}>+ Add event</button><div className="view-toggle"><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}>⌖ Map</button><button className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>▦ Week</button></div></div></section>
 
     <section className={`workspace ${!detailsOpen || visibleEvents.length === 0 ? 'no-details' : ''}`}>
       <div className={`map google-map ${view === 'week' ? 'calendar-mode' : ''}`}>
@@ -372,7 +407,7 @@ export default function Home() {
         {!detailsOpen && visibleEvents.length > 0 && <button className="show-details" onClick={() => setDetailsOpen(true)}>Show event details →</button>}
       </div>
 
-      {detailsOpen && visibleEvents.length > 0 && <aside className="event-panel"><div className="panel-top"><span className="match">92% YOUR VIBE</span><button className="close" aria-label="Close event details" onClick={() => setDetailsOpen(false)}>×</button></div><div className="event-art" style={{background: selected.color}}><span>{selected.emoji}</span><div className="art-sticker">TRY<br/>SOMETHING<br/><em>NEW</em></div></div><div className="event-content"><p className="host">{selected.host}</p><h2>{selected.title}</h2><div className="meta"><span>◷ {selected.time}</span><span>⌖ {selected.place}</span></div><address className="event-address">{selected.address}</address><div className="tags">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div><blockquote><b>✦ Why this one?</b>{selected.reason}</blockquote><div className="going"><div className="faces">{crewMembers.slice(0, 3).map(member => <i key={member.userId}>{member.anonymousAvatar}</i>)}</div><span><b>{crewMembers.length} crew members</b><br/>Identity stays private until individually revealed</span></div><div className="crew-preview" aria-label="Event crew members">{crewMembers.map(member => <span key={member.userId}>{member.anonymousAvatar} {member.anonymousAlias}{isCurrentUser(member) ? ' (you)' : !friends.includes(member.userId) ? <button onClick={() => addFriend(member)}>Add friend</button> : <button onClick={() => openFriendChat(member)}>Message</button>}</span>)}</div><div className="actions"><button className="primary" onClick={toggleCrew}>{joinedCrew ? 'Leave this crew' : 'Count me in →'}</button><button className={`save ${savedEventIds.includes(selected.id) ? 'saved' : ''}`} aria-label={savedEventIds.includes(selected.id) ? 'Remove event from My week' : 'Save event to My week'} aria-pressed={savedEventIds.includes(selected.id)} onClick={toggleSaved}>{savedEventIds.includes(selected.id) ? '♥' : '♡'}</button></div>{savedEventIds.includes(selected.id) && <p className="saved-note">Saved to My week</p>}{joinedCrew && <button className="open-crew-chat" onClick={() => setChatOpen(true)}>Open crew chat →</button>}{customEvents.some(event => event.id === selected.id) && <button className="delete-event" onClick={deleteEvent}>Delete event</button>}</div></aside>}
+      {detailsOpen && visibleEvents.length > 0 && <aside className="event-panel"><div className="panel-top"><span className="match">{matchScore}% YOUR VIBE</span><button className="close" aria-label="Close event details" onClick={() => setDetailsOpen(false)}>×</button></div><div className="event-art" style={{background: selected.color}}><span>{selected.emoji}</span><div className="art-sticker">TRY<br/>SOMETHING<br/><em>NEW</em></div></div><div className="event-content"><p className="host">{selected.host}</p><h2>{selected.title}</h2><div className="meta"><span>◷ {selected.time}</span><span>⌖ {selected.place}</span></div><address className="event-address">{selected.address}</address><div className="tags">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div><blockquote><b>✦ Why this one?</b>{displayReason}</blockquote><div className="going"><div className="faces">{crewMembers.slice(0, 3).map(member => <i key={member.userId}>{member.anonymousAvatar}</i>)}</div><span><b>{crewMembers.length} crew members</b><br/>Identity stays private until individually revealed</span></div><div className="crew-preview" aria-label="Event crew members">{crewMembers.map(member => <span key={member.userId}>{member.anonymousAvatar} {member.anonymousAlias}{isCurrentUser(member) ? ' (you)' : !friends.includes(member.userId) ? <button onClick={() => addFriend(member)}>Add friend</button> : <button onClick={() => openFriendChat(member)}>Message</button>}</span>)}</div><div className="actions"><button className="primary" onClick={toggleCrew}>{joinedCrew ? 'Leave this crew' : 'Count me in →'}</button><button className={`save ${savedEventIds.includes(selected.id) ? 'saved' : ''}`} aria-label={savedEventIds.includes(selected.id) ? 'Remove event from My week' : 'Save event to My week'} aria-pressed={savedEventIds.includes(selected.id)} onClick={toggleSaved}>{savedEventIds.includes(selected.id) ? '♥' : '♡'}</button></div>{savedEventIds.includes(selected.id) && <p className="saved-note">Saved to My week</p>}{joinedCrew && <button className="open-crew-chat" onClick={() => setChatOpen(true)}>Open crew chat →</button>}{customEvents.some(event => event.id === selected.id) && <button className="delete-event" onClick={deleteEvent}>Delete event</button>}</div></aside>}
     </section>
 
     {chatOpen && joinedCrew && <section className="chat-card" aria-label="Event group chat"><header><div><b>{selected.title} crew</b><small><i/> {crewMembers.length} members · anonymous by default</small></div><button onClick={() => setChatOpen(false)} aria-label="Close messages">×</button></header><div className="chat-context"><span>{selected.emoji}</span><p><b>{selected.title}</b><br/>{selected.time}</p><button onClick={() => setChatOpen(false)}>View</button></div><div className="messages">{crewMessages.map(message => { const member = crewMembers.find(item => item.userId === message.userId); const mine = message.userId === 'current-user'; return <div className={mine ? 'outgoing' : 'incoming'} key={message.id}>{!mine && <span title={member?.anonymousAlias}>{member?.anonymousAvatar ?? '🎭'}</span>}<p>{message.content}<small>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small></p></div>; })}{crewMessages.length === 0 && <p className="empty-chat">Start the conversation with a quick emoji.</p>}</div><div className="quick-emojis" aria-label="Quick emoji replies">{['👋','🙋','✨','☕','👍','🎉'].map(emoji => <button key={emoji} onClick={() => send(emoji)}>{emoji}</button>)}</div><div className="composer"><input autoFocus value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && send()} placeholder="Type a message…"/><button className="send" onClick={() => send()} aria-label="Send message">↑</button></div></section>}

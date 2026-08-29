@@ -1,17 +1,20 @@
-<<<<<<< HEAD
 # Dependencies and package-manager cache
 node_modules/
+.pnp
+.pnp.*
 .pnpm-store/
 
 # Build output
 dist/
+out/
 .next/
 .vinext/
 .wrangler/
 
-# Local environment files
+# Local environment files and secrets
 .env
 .env.*
+.dev.vars
 !.env.example
 
 # Logs and local tooling
@@ -19,25 +22,4 @@ dist/
 .DS_Store
 Thumbs.db
 .vscode/
-=======
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-
-# generated builds
-/.next/
-/.vinext/
-/dist/
-/out/
-/.wrangler/
-
-# local environment and logs
-.env*
-*.log
 next-env.d.ts
-
-# system files
-.DS_Store
-Thumbs.db
->>>>>>> 841f0941dfefe6eead6613c7c8136eb692604041

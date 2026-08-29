@@ -1,3 +1,14 @@
+-- ============================================================
+-- STATUS: not wired up. This is the target production schema
+-- (PostgreSQL) for Sidequest Campus Events. The hackathon build runs
+-- entirely on browser localStorage (see lib/social-storage.ts and
+-- app/page.tsx) and does not connect to this database — there is no
+-- Postgres/D1 driver in package.json and no env.DB usage in app/ or
+-- lib/. Kept here as the intended design, not as something the demo
+-- depends on. If you do wire it up, note it's Postgres-flavoured
+-- (gen_random_uuid(), PL/pgSQL functions/triggers), which is NOT
+-- compatible with Cloudflare D1 (SQLite) if that's the deploy target.
+-- ============================================================
 
 -- ============================================================
 -- 0. EXTENSIONS
