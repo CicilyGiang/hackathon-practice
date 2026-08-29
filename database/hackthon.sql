@@ -21,6 +21,21 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- 1. DROP EXISTING TABLES
 -- ============================================================
 
+DROP VIEW IF EXISTS v_my_quest_schedule CASCADE;
+DROP VIEW IF EXISTS v_quest_catalog CASCADE;
+DROP VIEW IF EXISTS v_social_profiles CASCADE;
+DROP TABLE IF EXISTS premium_passes CASCADE;
+DROP TABLE IF EXISTS quest_point_transactions CASCADE;
+DROP TABLE IF EXISTS user_quest_claims CASCADE;
+DROP TABLE IF EXISTS quest_catalog CASCADE;
+DROP TABLE IF EXISTS quest_categories CASCADE;
+DROP TABLE IF EXISTS message_reads CASCADE;
+DROP TABLE IF EXISTS direct_messages CASCADE;
+DROP TABLE IF EXISTS conversation_members CASCADE;
+DROP TABLE IF EXISTS conversations CASCADE;
+DROP TABLE IF EXISTS friendships CASCADE;
+DROP TABLE IF EXISTS friend_requests CASCADE;
+DROP TABLE IF EXISTS user_social_profiles CASCADE;
 DROP TABLE IF EXISTS email_verification_tokens CASCADE;
 DROP TABLE IF EXISTS password_reset_tokens CASCADE;
 DROP TABLE IF EXISTS user_sessions CASCADE;
@@ -3883,6 +3898,633 @@ ON SCHEMA public
 TO campus_admin_role;
 
 
+-- ============================================================
+-- 65. SIDEQUEST SOCIAL PROFILE EXTENSION
+-- Database-only production design for the current UI features.
+-- ============================================================
+
+CREATE TABLE user_social_profiles (
+    user_id BIGINT PRIMARY KEY
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    semester VARCHAR(40),
+    phone_e164 VARCHAR(20) UNIQUE,
+    account_type VARCHAR(20) NOT NULL DEFAULT 'student'
+        CHECK (account_type IN ('student', 'organizer')),
+    club_name VARCHAR(150),
+    about_me VARCHAR(240) NOT NULL DEFAULT '',
+    favourite_activities TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    profile_avatar_type VARCHAR(20) NOT NULL DEFAULT 'preset'
+        CHECK (profile_avatar_type IN ('preset', 'upload', 'url')),
+    profile_avatar_value TEXT NOT NULL DEFAULT '🌟',
+    interests_visible BOOLEAN NOT NULL DEFAULT TRUE,
+    activities_visible BOOLEAN NOT NULL DEFAULT TRUE,
+    profile_visible BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (cardinality(favourite_activities) <= 6),
+    CHECK (char_length(profile_avatar_value) <= 2000000),
+    CHECK (
+        (account_type = 'student' AND club_name IS NULL)
+        OR account_type = 'organizer'
+    )
+);
+
+CREATE TRIGGER trg_user_social_profiles_updated_at
+BEFORE UPDATE ON user_social_profiles
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================
+-- 66. FRIEND REQUESTS AND ACCEPTED FRIENDSHIPS
+-- ============================================================
+
+CREATE TABLE friend_requests (
+    friend_request_id BIGSERIAL PRIMARY KEY,
+    sender_user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    receiver_user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    request_method VARCHAR(20) NOT NULL
+        CHECK (request_method IN ('email', 'phone', 'qr', 'profile')),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'accepted', 'declined', 'cancelled', 'expired')),
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP + INTERVAL '7 days'),
+    responded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (sender_user_id <> receiver_user_id)
+);
+
+CREATE UNIQUE INDEX uq_pending_friend_request
+ON friend_requests (
+    LEAST(sender_user_id, receiver_user_id),
+    GREATEST(sender_user_id, receiver_user_id)
+)
+WHERE status = 'pending';
+
+CREATE TABLE friendships (
+    user_low_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    user_high_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    source_request_id BIGINT
+        REFERENCES friend_requests(friend_request_id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_low_id, user_high_id),
+    CHECK (user_low_id < user_high_id)
+);
+
+CREATE INDEX idx_friend_requests_receiver_status
+ON friend_requests(receiver_user_id, status, created_at DESC);
+
+CREATE INDEX idx_friendships_high
+ON friendships(user_high_id);
+
+
+-- ============================================================
+-- 67. PRIVATE AND EVENT CONVERSATIONS
+-- ============================================================
+
+CREATE TABLE conversations (
+    conversation_id BIGSERIAL PRIMARY KEY,
+    conversation_type VARCHAR(20) NOT NULL
+        CHECK (conversation_type IN ('direct', 'event', 'club')),
+    event_id BIGINT REFERENCES events(event_id) ON DELETE CASCADE,
+    club_id BIGINT REFERENCES clubs(club_id) ON DELETE CASCADE,
+    title VARCHAR(180),
+    created_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (
+        (conversation_type = 'event' AND event_id IS NOT NULL AND club_id IS NULL)
+        OR (conversation_type = 'club' AND club_id IS NOT NULL AND event_id IS NULL)
+        OR (conversation_type = 'direct' AND event_id IS NULL AND club_id IS NULL)
+    )
+);
+
+CREATE TABLE conversation_members (
+    conversation_id BIGINT NOT NULL
+        REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    anonymous_alias VARCHAR(80),
+    anonymous_avatar VARCHAR(20),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    left_at TIMESTAMPTZ,
+    notifications_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY (conversation_id, user_id),
+    CHECK (left_at IS NULL OR left_at >= joined_at)
+);
+
+CREATE TABLE direct_messages (
+    message_id BIGSERIAL PRIMARY KEY,
+    conversation_id BIGINT NOT NULL
+        REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    sender_user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    message_text VARCHAR(2000) NOT NULL,
+    message_type VARCHAR(20) NOT NULL DEFAULT 'text'
+        CHECK (message_type IN ('text', 'emoji', 'system')),
+    edited_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (char_length(btrim(message_text)) > 0)
+);
+
+CREATE TABLE message_reads (
+    message_id BIGINT NOT NULL
+        REFERENCES direct_messages(message_id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    read_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, user_id)
+);
+
+CREATE INDEX idx_conversation_members_user
+ON conversation_members(user_id, left_at);
+
+CREATE INDEX idx_messages_conversation_created
+ON direct_messages(conversation_id, created_at DESC)
+WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_message_reads_user
+ON message_reads(user_id, read_at DESC);
+
+
+-- ============================================================
+-- 68. QUEST CATEGORIES AND 200+ QUEST CATALOG
+-- ============================================================
+
+CREATE TABLE quest_categories (
+    quest_category_id SMALLSERIAL PRIMARY KEY,
+    category_name VARCHAR(40) UNIQUE NOT NULL,
+    emoji VARCHAR(20) NOT NULL,
+    colour VARCHAR(20) NOT NULL,
+    display_order SMALLINT NOT NULL UNIQUE
+);
+
+CREATE TABLE quest_catalog (
+    quest_id BIGSERIAL PRIMARY KEY,
+    catalog_key VARCHAR(100) UNIQUE NOT NULL,
+    quest_category_id SMALLINT NOT NULL
+        REFERENCES quest_categories(quest_category_id) ON DELETE RESTRICT,
+    title VARCHAR(180) NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    emoji VARCHAR(20) NOT NULL,
+    difficulty VARCHAR(20) NOT NULL
+        CHECK (difficulty IN ('Easy', 'Medium', 'Hard')),
+    duration_minutes SMALLINT NOT NULL
+        CHECK (duration_minutes BETWEEN 10 AND 720),
+    xp_reward INTEGER NOT NULL
+        CHECK (xp_reward BETWEEN 0 AND 10000),
+    point_reward INTEGER NOT NULL
+        CHECK (point_reward BETWEEN 0 AND 10000),
+    default_venue_name VARCHAR(180),
+    default_address TEXT,
+    location_id BIGINT REFERENCES locations(location_id) ON DELETE SET NULL,
+    source_event_id BIGINT REFERENCES events(event_id) ON DELETE SET NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TRIGGER trg_quest_catalog_updated_at
+BEFORE UPDATE ON quest_catalog
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+INSERT INTO quest_categories(category_name, emoji, colour, display_order)
+VALUES
+    ('Social', '🤝', '#ff8b68', 1),
+    ('Study', '📚', '#6f91ff', 2),
+    ('Wellbeing', '🌿', '#47b98b', 3),
+    ('Food', '🥪', '#f2b43f', 4),
+    ('Culture', '🌏', '#db6f9b', 5),
+    ('Explore', '🧭', '#8b67ee', 6),
+    ('Community', '💛', '#43a8e8', 7),
+    ('Events', '🎟️', '#f0b844', 8)
+ON CONFLICT (category_name) DO UPDATE SET
+    emoji = EXCLUDED.emoji,
+    colour = EXCLUDED.colour,
+    display_order = EXCLUDED.display_order;
+
+WITH category_actions(category_name, emoji, action_name, action_order) AS (
+    VALUES
+    ('Social','🤝','Meet Someone New',1), ('Social','☕','Coffee Conversation',2), ('Social','👥','Three-Person Catch-up',3), ('Social','😊','Compliment Challenge',4), ('Social','🎓','Classmate Connection',5), ('Social','💬','Friend Reunion',6),
+    ('Study','📚','Focus Session',1), ('Study','📝','Revision Exchange',2), ('Study','💡','Teach One Concept',3), ('Study','⏱️','Library Sprint',4), ('Study','🧃','Study Break Buddy',5), ('Study','🗓️','Assignment Planning',6),
+    ('Wellbeing','🌿','Mindful Walk',1), ('Wellbeing','📵','Screen-Free Break',2), ('Wellbeing','🧘','Stretch Together',3), ('Wellbeing','🌇','Sunset Reset',4), ('Wellbeing','🙏','Gratitude Chat',5), ('Wellbeing','💚','Healthy Habit Hour',6),
+    ('Food','🍪','Snack Swap',1), ('Food','🥪','Lunch Discovery',2), ('Food','💵','Budget Meal Hunt',3), ('Food','🥟','Taste Something New',4), ('Food','🧺','Picnic Plan',5), ('Food','🍰','Coffee and Cake',6),
+    ('Culture','🗣️','Language Swap',1), ('Culture','🎵','Music Exchange',2), ('Culture','🌏','Tradition Story',3), ('Culture','🏛️','Museum Conversation',4), ('Culture','🎬','Film Discussion',5), ('Culture','🎨','Creative Culture Hour',6),
+    ('Explore','📸','Photo Trail',1), ('Explore','🧭','Hidden Campus Corner',2), ('Explore','🗺️','New Suburb Walk',3), ('Explore','🖼️','Public Art Hunt',4), ('Explore','🏙️','Architecture Trail',5), ('Explore','🚆','Transit Adventure',6),
+    ('Community','👋','Welcome a Student',1), ('Community','💛','Volunteer Together',2), ('Community','🎪','Club Introduction',3), ('Community','🤲','Community Check-in',4), ('Community','🫶','Help a Classmate',5), ('Community','✨','Build a Small Crew',6),
+    ('Events','🎟️','Attend Together',1), ('Events','🎉','Bring a First-Timer',2), ('Events','🎤','Meet the Host',3), ('Events','📷','Event Photo Mission',4), ('Events','💬','Post-Event Catch-up',5), ('Events','🙋','Help Welcome Guests',6)
+), quest_venues(venue_name, address, venue_order) AS (
+    VALUES
+    ('Fisher Library', 'Fisher Library, Eastern Avenue, Camperdown NSW 2006', 1),
+    ('Victoria Park', 'Victoria Park, Parramatta Road, Camperdown NSW 2050', 2),
+    ('The Quadrangle', 'The Quadrangle, University Place, Camperdown NSW 2006', 3),
+    ('Manning House', 'Manning House, Manning Road, Camperdown NSW 2006', 4),
+    ('Cadigal Green', 'Cadigal Green, Maze Crescent, Darlington NSW 2008', 5)
+)
+INSERT INTO quest_catalog (
+    catalog_key, quest_category_id, title, description, emoji,
+    difficulty, duration_minutes, xp_reward, point_reward,
+    default_venue_name, default_address
+)
+SELECT
+    lower(regexp_replace(ca.category_name || '-' || ca.action_order || '-' || qv.venue_order, '[^a-zA-Z0-9]+', '-', 'g')),
+    qc.quest_category_id,
+    ca.action_name || ' · ' || qv.venue_name,
+    ca.action_name || ' with another student at ' || qv.venue_name || '. Make the plan specific, welcoming and safe.',
+    ca.emoji,
+    CASE ((ca.action_order + qv.venue_order) % 3)
+        WHEN 0 THEN 'Easy'
+        WHEN 1 THEN 'Medium'
+        ELSE 'Hard'
+    END,
+    CASE ((ca.action_order + qv.venue_order) % 3)
+        WHEN 0 THEN 40
+        WHEN 1 THEN 75
+        ELSE 120
+    END,
+    35 + (((ca.action_order + qv.venue_order) % 3) * 55) + (ca.action_order * 5),
+    12 + (((ca.action_order + qv.venue_order) % 3) * 20) + (ca.action_order * 2),
+    qv.venue_name,
+    qv.address
+FROM category_actions ca
+CROSS JOIN quest_venues qv
+JOIN quest_categories qc
+    ON qc.category_name = ca.category_name
+ON CONFLICT (catalog_key) DO UPDATE SET
+    title = EXCLUDED.title,
+    description = EXCLUDED.description,
+    difficulty = EXCLUDED.difficulty,
+    duration_minutes = EXCLUDED.duration_minutes,
+    xp_reward = EXCLUDED.xp_reward,
+    point_reward = EXCLUDED.point_reward,
+    default_venue_name = EXCLUDED.default_venue_name,
+    default_address = EXCLUDED.default_address,
+    is_active = TRUE;
+
+
+-- ============================================================
+-- 69. USER QUEST SCHEDULE, POINTS AND PREMIUM PASSES
+-- ============================================================
+
+CREATE TABLE user_quest_claims (
+    quest_claim_id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    quest_id BIGINT NOT NULL
+        REFERENCES quest_catalog(quest_id) ON DELETE RESTRICT,
+    friend_or_crew_name VARCHAR(160) NOT NULL,
+    scheduled_date DATE NOT NULL,
+    scheduled_time TIME NOT NULL,
+    venue_name VARCHAR(180),
+    venue_address TEXT NOT NULL,
+    latitude NUMERIC(9,6) CHECK (latitude BETWEEN -90 AND 90),
+    longitude NUMERIC(9,6) CHECK (longitude BETWEEN -180 AND 180),
+    claim_status VARCHAR(20) NOT NULL DEFAULT 'confirmed'
+        CHECK (claim_status IN ('confirmed', 'completed', 'failed', 'cancelled')),
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ,
+    CHECK (char_length(btrim(friend_or_crew_name)) > 0),
+    CHECK (char_length(btrim(venue_address)) > 4),
+    CHECK (expires_at > claimed_at),
+    CHECK (
+        (claim_status = 'completed' AND completed_at IS NOT NULL)
+        OR claim_status <> 'completed'
+    )
+);
+
+CREATE UNIQUE INDEX uq_active_user_quest_per_day
+ON user_quest_claims(user_id, quest_id, scheduled_date)
+WHERE claim_status = 'confirmed';
+
+CREATE INDEX idx_user_quest_schedule
+ON user_quest_claims(user_id, scheduled_date, scheduled_time)
+WHERE claim_status = 'confirmed';
+
+CREATE INDEX idx_quest_claim_expiry
+ON user_quest_claims(expires_at)
+WHERE claim_status = 'confirmed';
+
+CREATE TABLE quest_point_transactions (
+    transaction_id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    quest_claim_id BIGINT
+        REFERENCES user_quest_claims(quest_claim_id) ON DELETE SET NULL,
+    transaction_type VARCHAR(20) NOT NULL
+        CHECK (transaction_type IN ('earn', 'spend', 'adjustment')),
+    amount INTEGER NOT NULL CHECK (amount <> 0),
+    description VARCHAR(250) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_quest_points_user_created
+ON quest_point_transactions(user_id, created_at DESC);
+
+CREATE TABLE premium_passes (
+    premium_pass_id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL
+        REFERENCES users(user_id) ON DELETE CASCADE,
+    pass_name VARCHAR(100) NOT NULL,
+    points_cost INTEGER NOT NULL CHECK (points_cost >= 0),
+    duration_hours INTEGER NOT NULL CHECK (duration_hours BETWEEN 1 AND 744),
+    pass_status VARCHAR(20) NOT NULL DEFAULT 'ready'
+        CHECK (pass_status IN ('ready', 'active', 'expired', 'cancelled')),
+    redeemed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    activated_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    CHECK (
+        (pass_status = 'active' AND activated_at IS NOT NULL AND expires_at IS NOT NULL)
+        OR pass_status <> 'active'
+    )
+);
+
+
+-- ============================================================
+-- 70. QUEST DATABASE RULES
+-- Enforces seven-day booking and maximum three quests per day.
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION validate_quest_claim_schedule()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_day_count INTEGER;
+    v_active_count INTEGER;
+BEGIN
+    IF NEW.scheduled_date < CURRENT_DATE
+       OR NEW.scheduled_date > CURRENT_DATE + 6 THEN
+        RAISE EXCEPTION 'Quest date must be within today and the next six days';
+    END IF;
+
+    IF NEW.claim_status = 'confirmed' THEN
+        SELECT COUNT(*) INTO v_day_count
+        FROM user_quest_claims
+        WHERE user_id = NEW.user_id
+          AND scheduled_date = NEW.scheduled_date
+          AND claim_status = 'confirmed'
+          AND quest_claim_id <> COALESCE(NEW.quest_claim_id, 0);
+
+        IF v_day_count >= 3 THEN
+            RAISE EXCEPTION 'Maximum three quests per scheduled day';
+        END IF;
+
+        SELECT COUNT(*) INTO v_active_count
+        FROM user_quest_claims
+        WHERE user_id = NEW.user_id
+          AND claim_status = 'confirmed'
+          AND scheduled_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 6
+          AND quest_claim_id <> COALESCE(NEW.quest_claim_id, 0);
+
+        IF v_active_count >= 21 THEN
+            RAISE EXCEPTION 'Maximum twenty-one active quests in the seven-day planner';
+        END IF;
+    END IF;
+
+    NEW.expires_at := GREATEST(
+        CURRENT_TIMESTAMP,
+        (NEW.scheduled_date + NEW.scheduled_time) AT TIME ZONE 'Australia/Sydney'
+    ) + INTERVAL '24 hours';
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_validate_quest_claim_schedule
+BEFORE INSERT OR UPDATE OF scheduled_date, scheduled_time, claim_status
+ON user_quest_claims
+FOR EACH ROW EXECUTE FUNCTION validate_quest_claim_schedule();
+
+CREATE OR REPLACE FUNCTION claim_quest(
+    p_quest_id BIGINT,
+    p_scheduled_date DATE,
+    p_scheduled_time TIME,
+    p_friend_or_crew_name VARCHAR,
+    p_venue_address TEXT,
+    p_venue_name VARCHAR DEFAULT NULL,
+    p_latitude NUMERIC DEFAULT NULL,
+    p_longitude NUMERIC DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_user_id BIGINT := get_current_app_user_id();
+    v_claim_id BIGINT;
+BEGIN
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'Authenticated application user is required';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM quest_catalog
+        WHERE quest_id = p_quest_id AND is_active = TRUE
+    ) THEN
+        RAISE EXCEPTION 'Quest is not available';
+    END IF;
+
+    INSERT INTO user_quest_claims (
+        user_id, quest_id, friend_or_crew_name,
+        scheduled_date, scheduled_time, venue_name, venue_address,
+        latitude, longitude, expires_at
+    ) VALUES (
+        v_user_id, p_quest_id, btrim(p_friend_or_crew_name),
+        p_scheduled_date, p_scheduled_time, p_venue_name,
+        btrim(p_venue_address), p_latitude, p_longitude,
+        CURRENT_TIMESTAMP + INTERVAL '24 hours'
+    )
+    RETURNING quest_claim_id INTO v_claim_id;
+
+    RETURN v_claim_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION complete_my_quest(p_quest_claim_id BIGINT)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_user_id BIGINT := get_current_app_user_id();
+    v_points INTEGER;
+BEGIN
+    SELECT qc.point_reward INTO v_points
+    FROM user_quest_claims uqc
+    JOIN quest_catalog qc ON qc.quest_id = uqc.quest_id
+    WHERE uqc.quest_claim_id = p_quest_claim_id
+      AND uqc.user_id = v_user_id
+      AND uqc.claim_status = 'confirmed'
+      AND uqc.expires_at > CURRENT_TIMESTAMP
+    FOR UPDATE OF uqc;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Quest is missing, expired, completed, or not owned by this user';
+    END IF;
+
+    UPDATE user_quest_claims
+    SET claim_status = 'completed', completed_at = CURRENT_TIMESTAMP
+    WHERE quest_claim_id = p_quest_claim_id;
+
+    INSERT INTO quest_point_transactions (
+        user_id, quest_claim_id, transaction_type, amount, description
+    ) VALUES (
+        v_user_id, p_quest_claim_id, 'earn', v_points, 'Quest completion reward'
+    );
+
+    RETURN v_points;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION expire_overdue_quests()
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_count INTEGER;
+BEGIN
+    UPDATE user_quest_claims
+    SET claim_status = 'failed'
+    WHERE claim_status = 'confirmed'
+      AND expires_at <= CURRENT_TIMESTAMP;
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$;
+
+
+-- ============================================================
+-- 71. SAFE READ VIEWS
+-- ============================================================
+
+CREATE VIEW v_social_profiles AS
+SELECT
+    u.user_id,
+    COALESCE(u.display_name, u.username) AS display_name,
+    u.avatar_url,
+    u.bio,
+    usp.semester,
+    usp.about_me,
+    CASE WHEN usp.interests_visible THEN
+        COALESCE(array_agg(DISTINCT i.interest_name)
+            FILTER (WHERE i.interest_name IS NOT NULL), ARRAY[]::VARCHAR[])
+        ELSE ARRAY[]::VARCHAR[]
+    END AS interests,
+    CASE WHEN usp.activities_visible THEN usp.favourite_activities
+        ELSE ARRAY[]::TEXT[]
+    END AS favourite_activities,
+    usp.profile_avatar_type,
+    usp.profile_avatar_value
+FROM users u
+JOIN user_social_profiles usp ON usp.user_id = u.user_id
+LEFT JOIN user_interests ui ON ui.user_id = u.user_id
+LEFT JOIN interests i ON i.interest_id = ui.interest_id
+WHERE u.is_active = TRUE
+  AND usp.profile_visible = TRUE
+GROUP BY u.user_id, usp.user_id;
+
+CREATE VIEW v_quest_catalog AS
+SELECT
+    qc.quest_id,
+    qc.catalog_key,
+    cat.category_name,
+    cat.colour AS category_colour,
+    qc.title,
+    qc.description,
+    qc.emoji,
+    qc.difficulty,
+    qc.duration_minutes,
+    qc.xp_reward,
+    qc.point_reward,
+    qc.default_venue_name,
+    qc.default_address,
+    qc.location_id,
+    qc.source_event_id
+FROM quest_catalog qc
+JOIN quest_categories cat
+    ON cat.quest_category_id = qc.quest_category_id
+WHERE qc.is_active = TRUE;
+
+CREATE VIEW v_my_quest_schedule
+WITH (security_barrier = true) AS
+SELECT
+    uqc.quest_claim_id,
+    uqc.user_id,
+    qc.title,
+    cat.category_name,
+    qc.emoji,
+    uqc.friend_or_crew_name,
+    uqc.scheduled_date,
+    uqc.scheduled_time,
+    uqc.venue_name,
+    uqc.venue_address,
+    uqc.latitude,
+    uqc.longitude,
+    uqc.claim_status,
+    uqc.expires_at,
+    qc.xp_reward,
+    qc.point_reward
+FROM user_quest_claims uqc
+JOIN quest_catalog qc ON qc.quest_id = uqc.quest_id
+JOIN quest_categories cat ON cat.quest_category_id = qc.quest_category_id
+WHERE uqc.user_id = get_current_app_user_id();
+
+
+-- ============================================================
+-- 72. FEATURE SECURITY AND ROLE PERMISSIONS
+-- ============================================================
+
+REVOKE ALL ON
+    user_social_profiles, friend_requests, friendships,
+    conversations, conversation_members, direct_messages, message_reads,
+    user_quest_claims, quest_point_transactions, premium_passes
+FROM PUBLIC, campus_app_role, campus_read_role;
+
+REVOKE ALL ON FUNCTION claim_quest(
+    BIGINT, DATE, TIME, VARCHAR, TEXT, VARCHAR, NUMERIC, NUMERIC
+) FROM PUBLIC;
+
+REVOKE ALL ON FUNCTION complete_my_quest(BIGINT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION expire_overdue_quests() FROM PUBLIC;
+
+GRANT SELECT ON
+    quest_categories, quest_catalog, v_quest_catalog
+TO campus_read_role, campus_app_role;
+
+GRANT SELECT ON v_social_profiles
+TO campus_app_role;
+
+GRANT SELECT ON v_my_quest_schedule
+TO campus_app_role;
+
+GRANT EXECUTE ON FUNCTION claim_quest(
+    BIGINT, DATE, TIME, VARCHAR, TEXT, VARCHAR, NUMERIC, NUMERIC
+) TO campus_app_role;
+
+GRANT EXECUTE ON FUNCTION complete_my_quest(BIGINT)
+TO campus_app_role;
+
+GRANT EXECUTE ON FUNCTION expire_overdue_quests()
+TO campus_admin_role;
+
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public
+TO campus_admin_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+    user_social_profiles, friend_requests, friendships,
+    conversations, conversation_members, direct_messages, message_reads,
+    quest_categories, quest_catalog, user_quest_claims,
+    quest_point_transactions, premium_passes
+TO campus_admin_role;
+
+
 GRANT SELECT, INSERT, UPDATE, DELETE
 ON ALL TABLES
 IN SCHEMA public
@@ -3911,4 +4553,3 @@ ON FUNCTION save_recommendation(
     VARCHAR
 )
 TO campus_admin_role;
-

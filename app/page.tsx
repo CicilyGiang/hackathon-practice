@@ -76,6 +76,11 @@ export default function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile>(emptyProfile);
   const [profileError, setProfileError] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [loginError, setLoginError] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [premiumOpen, setPremiumOpen] = useState(false);
@@ -217,12 +222,21 @@ export default function Home() {
     });
   };
 
-  const saveProfile = (event: FormEvent<HTMLFormElement>) => {
+  const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const clean: Profile = { ...profileDraft, email: profileDraft.email.trim(), name: profileDraft.name.trim(), year: profileDraft.year.trim(), semester: profileDraft.semester.trim(), major: profileDraft.major.trim(), phone: profileDraft.phone.trim(), clubName: profileDraft.clubName.trim(), bio: profileDraft.bio.trim(), interests: profileDraft.interests.slice(0, 6), favouriteActivities: profileDraft.favouriteActivities.slice(0, 6), avatar: profileDraft.avatar || '🌟' };
     if (!usydStudentEmail.test(clean.email)) {
       setProfileError('Use your University of Sydney student email ending in @uni.sydney.edu.au.');
       return;
+    }
+    if (!profile) {
+      setAuthBusy(true);
+      try {
+        const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...clean, password: authPassword }) });
+        const result = await response.json() as { message?: string };
+        if (!response.ok) { setProfileError(result.message ?? 'Account creation failed.'); return; }
+      } catch { setProfileError('Could not connect to the login server.'); return; }
+      finally { setAuthBusy(false); }
     }
     setProfileError('');
     window.localStorage.setItem('sidequest-profile', JSON.stringify(clean));
@@ -231,6 +245,20 @@ export default function Home() {
     updateSocial(current => ({ ...current, membersByEvent: Object.fromEntries(Object.entries(current.membersByEvent).map(([eventId, members]) => [eventId, members.map(member => isCurrentUser(member) ? { ...member, displayName: clean.name, major: clean.major, semester: clean.semester, bio: clean.bio, interests: clean.interests, favouriteActivities: clean.favouriteActivities, profileAvatar: clean.avatar } : member)])) }));
     setEditingProfile(false);
     setSignupDismissed(true);
+    setAuthPassword('');
+  };
+
+  const login = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setLoginError(''); setAuthBusy(true);
+    try {
+      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(loginForm) });
+      const result = await response.json() as { message?: string; profile?: Profile };
+      if (!response.ok || !result.profile) return setLoginError(result.message ?? 'Invalid email or password.');
+      const restored = { ...emptyProfile, ...result.profile };
+      setProfile(restored); setProfileDraft(restored); window.localStorage.setItem('sidequest-profile', JSON.stringify(restored));
+      setLoginOpen(false); setEditingProfile(false); setSignupDismissed(true); setLoginForm({ email: '', password: '' });
+    } catch { setLoginError('Could not connect to the login server.'); }
+    finally { setAuthBusy(false); }
   };
 
   const openProfile = () => {
@@ -264,6 +292,7 @@ export default function Home() {
   };
 
   const signOut = () => {
+    void fetch('/api/auth/logout', { method: 'POST' });
     if (!window.confirm('Sign out and remove this Sidequest account’s locally stored profile, chats and preferences from this device?')) return;
     [
       'sidequest-profile', 'sidequest-membership-plan', 'sidequest-event-reminders',
@@ -289,8 +318,9 @@ export default function Home() {
     joinedEvents.forEach(event => (social.membersByEvent[event.id] ?? []).filter(member => !isCurrentUser(member)).forEach(member => unique.set(member.userId, member)));
     return Array.from(unique.values());
   }, [joinedEvents, social.membersByEvent]);
+  const joinedEventIds = new Set(joinedEvents.map(event => event.id));
   const incomingIds = [
-    ...Object.values(social.messagesByEvent).flat().filter(message => message.userId !== 'current-user').map(message => message.id),
+    ...Object.entries(social.messagesByEvent).filter(([eventId]) => joinedEventIds.has(Number(eventId))).flatMap(([, messages]) => messages).filter(message => message.userId !== 'current-user').map(message => message.id),
     ...Object.values(directMessages).flat().filter(message => message.userId !== 'current-user').map(message => message.id),
   ];
   const unreadCount = incomingIds.filter(id => !readMessageIds.includes(id)).length;
@@ -608,17 +638,20 @@ export default function Home() {
           <fieldset className="avatar-picker"><legend>Profile avatar</legend><div className="avatar-preview"><AvatarVisual value={profileDraft.avatar} /></div><div className="avatar-options">{avatarOptions.map(avatar => <button type="button" key={avatar} className={profileDraft.avatar === avatar ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, avatar})}>{avatar}</button>)}</div><label className="avatar-upload">Upload my own photo<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => uploadAvatar(event.target.files?.[0])} /></label><small>JPG, PNG, WEBP or GIF · maximum 1 MB · stored only on this device</small></fieldset>
           <label>Email address<input required type="email" autoComplete="email" value={profileDraft.email} onChange={event => { setProfileDraft({...profileDraft, email:event.target.value}); setProfileError(''); }} placeholder="student@uni.sydney.edu.au" aria-invalid={Boolean(profileError)} aria-describedby="profile-email-help" /></label>
           <small id="profile-email-help" className={profileError ? 'profile-email-error' : 'profile-email-help'} role={profileError ? 'alert' : undefined}>{profileError || 'Only @uni.sydney.edu.au student email addresses can create a profile.'}</small>
+          {!profile && <label>Password<input required type="password" autoComplete="new-password" minLength={8} value={authPassword} onChange={event => { setAuthPassword(event.target.value); setProfileError(''); }} placeholder="At least 8 characters" /></label>}
           <div className="field-pair"><label>Study year<select required value={profileDraft.year} onChange={event => setProfileDraft({...profileDraft, year:event.target.value})}><option value="">Select year</option><option>1st year</option><option>2nd year</option><option>3rd year</option><option>4th year</option><option>Postgraduate</option></select></label><label>Semester<select required value={profileDraft.semester} onChange={event => setProfileDraft({...profileDraft, semester:event.target.value})}><option value="">Select semester</option><option>Semester 1</option><option>Semester 2</option><option>Summer term</option></select></label></div>
           <label>Major<input required value={profileDraft.major} onChange={event => setProfileDraft({...profileDraft, major:event.target.value})} placeholder="Computer Science" /></label>
           <label>Phone number<input required type="tel" autoComplete="tel" minLength={8} value={profileDraft.phone} onChange={event => setProfileDraft({...profileDraft, phone:event.target.value})} placeholder="04XX XXX XXX" /></label>
           <label>About me<textarea required maxLength={240} value={profileDraft.bio} onChange={event => setProfileDraft({...profileDraft, bio:event.target.value})} placeholder="I’m always up for a coffee, a creative workshop or meeting people outside my course." /><small>{profileDraft.bio.length}/240</small></label>
           <fieldset className="social-tag-picker"><legend>My interests <span>Choose up to 6</span></legend><div>{interestOptions.map(item => { const active = profileDraft.interests.includes(item); return <button type="button" key={item} className={active ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, interests: active ? profileDraft.interests.filter(value => value !== item) : profileDraft.interests.length < 6 ? [...profileDraft.interests, item] : profileDraft.interests})}>{active ? '✓ ' : '+ '}{item}</button>; })}</div></fieldset>
           <fieldset className="social-tag-picker"><legend>Things I enjoy doing <span>Choose up to 6</span></legend><div>{activityOptions.map(item => { const active = profileDraft.favouriteActivities.includes(item); return <button type="button" key={item} className={active ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, favouriteActivities: active ? profileDraft.favouriteActivities.filter(value => value !== item) : profileDraft.favouriteActivities.length < 6 ? [...profileDraft.favouriteActivities, item] : profileDraft.favouriteActivities})}>{active ? '✓ ' : '+ '}{item}</button>; })}</div></fieldset>
-          <button className="signup-submit" type="submit">{profile ? 'Save my profile' : 'Create my profile'} →</button>
+          <button className="signup-submit" type="submit" disabled={authBusy}>{authBusy ? 'Connecting securely…' : profile ? 'Save my profile →' : 'Create my profile →'}</button>
+          {!profile && <button className="login-under-profile" type="button" onClick={() => { setEditingProfile(false); setSignupDismissed(true); setLoginOpen(true); setLoginError(''); }}>Already have an account? <b>Log in</b></button>}
           {profile && <button className="signup-cancel" type="button" onClick={() => setEditingProfile(false)}>Cancel</button>}
         </form>
       </section>
     </div>}
+    {loginOpen && <div className="signup-backdrop"><section className="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title"><button className="signup-close" onClick={() => setLoginOpen(false)} aria-label="Close login">×</button><p className="eyebrow">WELCOME BACK</p><h2 id="login-title">Log in to Sidequest</h2><p>Your password is verified securely by PostgreSQL. Failed attempts are rate-limited and may temporarily lock the account.</p><form onSubmit={login}><label>University email<input required type="email" autoComplete="email" value={loginForm.email} onChange={event => { setLoginForm({...loginForm,email:event.target.value}); setLoginError(''); }} placeholder="student@uni.sydney.edu.au" /></label><label>Password<input required type="password" autoComplete="current-password" value={loginForm.password} onChange={event => { setLoginForm({...loginForm,password:event.target.value}); setLoginError(''); }} /></label>{loginError && <div className="login-error" role="alert">{loginError}</div>}<button className="signup-submit" disabled={authBusy}>{authBusy ? 'Checking account…' : 'Log in securely →'}</button><button className="signup-cancel" type="button" onClick={() => { setLoginOpen(false); setEditingProfile(true); setSignupDismissed(false); }}>Create a new profile</button></form></section></div>}
     {viewedMember && <div className="signup-backdrop"><section className="social-profile-card" role="dialog" aria-modal="true" aria-labelledby="social-profile-name"><button className="signup-close" onClick={() => setViewedMember(null)} aria-label="Close social profile">×</button><div className="social-profile-hero"><span><AvatarVisual value={viewedMember.profileAvatar ?? viewedMember.anonymousAvatar} /></span><p className="eyebrow">SOCIAL PROFILE</p><h2 id="social-profile-name">{viewedMember.displayName ?? viewedMember.anonymousAlias}</h2><p>{viewedMember.major ?? 'USYD student'}{viewedMember.semester ? ` · ${viewedMember.semester}` : ''}</p></div><div className="social-profile-content"><h3>About me</h3><p>{viewedMember.bio || 'This student has not added an introduction yet.'}</p><h3>Interests</h3><div className="profile-chips">{viewedMember.interests?.length ? viewedMember.interests.map(item => <span key={item}>{item}</span>) : <small>No interests shared yet.</small>}</div><h3>Things I enjoy doing</h3><div className="profile-chips activities">{viewedMember.favouriteActivities?.length ? viewedMember.favouriteActivities.map(item => <span key={item}>{item}</span>) : <small>No favourite activities shared yet.</small>}</div>{!isCurrentUser(viewedMember) && <button className="signup-submit" onClick={() => { setViewedMember(null); openFriendChat(viewedMember); }}>{friends.includes(viewedMember.userId) ? 'Message' : 'Say hello'} →</button>}{isCurrentUser(viewedMember) && <button className="signup-submit" onClick={() => { setViewedMember(null); openProfile(); }}>Edit my profile →</button>}<small className="profile-privacy">Only details you choose to share appear here. Email and phone number stay private.</small></div></section></div>}
   </main>;
 }
