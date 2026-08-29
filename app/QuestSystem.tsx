@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import PremiumTools from './PremiumTools';
 
 type Quest = { id: string; title: string; emoji: string; difficulty: 'Easy' | 'Medium' | 'Hard'; description: string; duration: string; xp: number; points: number; spots: number; colour: string };
 type Claim = { id: string; questId: string; friend: string; date: string; time: string; venue: string; status: 'Confirmed' | 'Completed'; claimedOn: string };
@@ -29,10 +30,11 @@ const todayKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/S
 export default function QuestSystem() {
   const [state, setState] = useState<QuestState>(emptyState);
   const [ready, setReady] = useState(false);
-  const [tab, setTab] = useState<'board' | 'active' | 'rewards'>('board');
+  const [tab, setTab] = useState<'board' | 'active' | 'premium' | 'rewards'>('board');
   const [planning, setPlanning] = useState<Quest | null>(null);
   const [plan, setPlan] = useState({ friend: '', date: '', time: '15:00', venue: '' });
   const [notice, setNotice] = useState('');
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     try {
@@ -40,6 +42,11 @@ export default function QuestSystem() {
       if (saved) setState(saved);
     } catch { window.localStorage.removeItem('sidequest-quest-state'); }
     setReady(true);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const update = (next: QuestState) => {
@@ -54,11 +61,13 @@ export default function QuestSystem() {
   const currentFloor = levelThresholds[level - 1];
   const nextLevel = levelThresholds[level] ?? currentFloor;
   const progress = level === 10 ? 100 : Math.round(((state.xp - currentFloor) / (nextLevel - currentFloor)) * 100);
-  const activePass = useMemo(() => state.passes.find(pass => pass.status === 'Active' && pass.activatedAt && Date.now() < new Date(pass.activatedAt).getTime() + pass.hours * 3600000), [state.passes]);
+  const activePass = useMemo(() => state.passes.find(pass => pass.status === 'Active' && pass.activatedAt && now < new Date(pass.activatedAt).getTime() + pass.hours * 3600000), [now, state.passes]);
+  const dailyLimit = activePass ? 4 : 3;
+  const activeLimit = activePass ? 3 : 2;
 
   const startPlan = (quest: Quest) => {
-    if (claimedToday >= 3) return setNotice('You have used all 3 daily quest claims. Come back tomorrow.');
-    if (activeClaims.length >= 2) return setNotice('Complete an active quest before claiming another one.');
+    if (claimedToday >= dailyLimit) return setNotice(`You have used all ${dailyLimit} daily quest claims. Come back tomorrow.`);
+    if (activeClaims.length >= activeLimit) return setNotice('Complete an active quest before claiming another one.');
     if (state.claims.some(claim => claim.questId === quest.id && claim.claimedOn === todayKey())) return setNotice('You already claimed this quest today.');
     setNotice('');
     setPlanning(quest);
@@ -110,14 +119,16 @@ export default function QuestSystem() {
     </div>
 
     <div className="quest-toolbar">
-      <div className="quest-tabs">{(['board','active','rewards'] as const).map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item === 'board' ? 'Quest board' : item === 'active' ? `My quests (${activeClaims.length})` : 'Premium rewards'}</button>)}</div>
-      <div className="daily-meter"><b>{claimedToday} / 3</b><span>daily claims used</span><i><u style={{width:`${(claimedToday / 3) * 100}%`}} /></i></div>
+      <div className="quest-tabs">{(['board','active','premium','rewards'] as const).map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item === 'board' ? 'Quest board' : item === 'active' ? `My quests (${activeClaims.length})` : item === 'premium' ? `Premium studio ${activePass ? '✦' : '◇'}` : 'Premium rewards'}</button>)}</div>
+      <div className="daily-meter"><b>{claimedToday} / {dailyLimit}</b><span>daily claims used</span><i><u style={{width:`${(claimedToday / dailyLimit) * 100}%`}} /></i></div>
     </div>
     {notice && <div className="quest-notice" role="status">✦ {notice}<button onClick={() => setNotice('')}>×</button></div>}
 
     {tab === 'board' && <div className="quest-grid">{quests.map(quest => { const claimed = state.claims.some(claim => claim.questId === quest.id && claim.claimedOn === todayKey()); return <article className="quest-card" key={quest.id} style={{'--quest-colour':quest.colour} as React.CSSProperties}><div className="quest-card-art"><span>{quest.emoji}</span><small>{quest.spots} spots today</small></div><div className="quest-card-copy"><div><span className={`difficulty ${quest.difficulty.toLowerCase()}`}>{quest.difficulty}</span><span>{quest.duration}</span></div><h2>{quest.title}</h2><p>{quest.description}</p><footer><span><b>+{quest.xp}</b> XP</span><span><b>+{quest.points}</b> points</span><button disabled={claimed} onClick={() => startPlan(quest)}>{claimed ? 'Claimed today' : 'Claim quest →'}</button></footer></div></article>; })}</div>}
 
     {tab === 'active' && <div className="quest-list">{state.claims.length === 0 ? <div className="quest-empty"><span>☆</span><h2>No quests yet.</h2><p>Claim a social quest and turn a loose idea into a real plan.</p><button onClick={() => setTab('board')}>Browse quests →</button></div> : state.claims.map(claim => { const quest = quests.find(item => item.id === claim.questId)!; return <article key={claim.id}><span className="quest-list-icon" style={{background:quest.colour}}>{quest.emoji}</span><div><small>{claim.status.toUpperCase()}</small><h3>{quest.title}</h3><p>With {claim.friend} · {claim.date} at {claim.time}<br/>{claim.venue}</p></div><div className="quest-list-reward"><b>+{quest.xp} XP</b><span>+{quest.points} points</span>{claim.status === 'Confirmed' ? <button onClick={() => completeQuest(claim)}>Confirm together</button> : <strong>✓ Reward earned</strong>}</div></article>; })}</div>}
+
+    {tab === 'premium' && <PremiumTools active={Boolean(activePass)} onGetPremium={() => setTab('rewards')} />}
 
     {tab === 'rewards' && <div className="rewards-layout"><div><div className="rewards-heading"><p className="eyebrow">PREMIUM ACCESS SHOP</p><h2>Spend points on access,<br/>not expensive prizes.</h2></div><div className="reward-grid">{rewards.map(reward => <article key={reward.title}><span>✦</span><h3>{reward.title}</h3><p>{reward.description}</p><b>{reward.cost} points</b><button disabled={state.points < reward.cost} onClick={() => redeem(reward)}>{state.points >= reward.cost ? 'Redeem pass →' : `${reward.cost - state.points} more needed`}</button></article>)}</div></div><aside className="wallet"><p className="eyebrow">YOUR WALLET</p><b>{state.points}</b><span>available Quest Points</span>{activePass && <div className="active-premium"><small>ACTIVE NOW</small><strong>{activePass.title}</strong><span>Premium features are unlocked.</span></div>}<h3>Premium passes</h3>{state.passes.length === 0 ? <p>No passes yet. Complete quests to build your balance.</p> : state.passes.map(pass => <div className="wallet-pass" key={pass.id}><span><b>{pass.title}</b><small>{pass.status}</small></span>{pass.status === 'Ready' && <button onClick={() => activate(pass)}>Activate</button>}</div>)}<h3>Recent activity</h3>{state.transactions.slice(0,4).map(item => <div className="wallet-row" key={item.id}><span>{item.label}</span><b className={item.kind}>{item.kind === 'earn' ? '+' : '−'}{item.amount}</b></div>)}</aside></div>}
 

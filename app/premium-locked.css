@@ -1,0 +1,44 @@
+.premium-studio.is-locked .premium-tool {
+  min-height: 94px;
+  border-color: #d5d5d5;
+  background: linear-gradient(135deg, #f2f2f2, #dedede);
+  box-shadow: none;
+  filter: grayscale(1);
+}
+
+.premium-studio.is-locked .premium-tool::after {
+  content: 'LOCKED';
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  border: 1px solid #aaa;
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: #777;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 1px;
+}
+
+.premium-studio.is-locked .premium-tool > :not(.tool-head) {
+  display: none;
+}
+
+.premium-studio.is-locked .tool-head {
+  margin: 0;
+  padding-right: 64px;
+}
+
+.premium-studio.is-locked .tool-head > span,
+.premium-studio.is-locked .tool-head p {
+  display: none;
+}
+
+.premium-studio.is-locked .tool-head small {
+  color: #888;
+}
+
+.premium-studio.is-locked .tool-head h3 {
+  margin-top: 5px;
+  color: #4f4f4f;
+}
