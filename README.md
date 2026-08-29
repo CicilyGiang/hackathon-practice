@@ -1,6 +1,6 @@
 # Sidequest Campus Events
 
-A Vinext/Next.js campus discovery prototype with event matching, anonymous crews, local profile storage, and group chat interactions.
+A Vinext/Next.js campus discovery prototype with event matching, anonymous crews, local profile storage, and group and direct chat interactions. Creating a local event automatically adds its creator to that event's community crew. All demo profile, membership, and message data stays in the browser's local storage.
 
 ## Start locally
 
