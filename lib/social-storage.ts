@@ -1,68 +1,55 @@
-import type { ChatMessage, CrewMember, MemberProfile, SocialState } from '../types/social';
+import type { CrewMember, SocialState } from '../types/social';
 
-const storageKey = 'sidequest-social-state';
-const currentUserId = 'current-user';
-
-const aliases = [
-  ['Curious Comet', '☄️'],
-  ['Brave Bilby', '🐾'],
-  ['Sunny Quokka', '🌞'],
-  ['Cosmic Koala', '🐨'],
-] as const;
-
-const seededMembers: CrewMember[] = [
-  { userId: 'demo-1', anonymousAlias: 'Quiet Quokka', anonymousAvatar: '🦘', identityRevealed: false },
-  { userId: 'demo-2', anonymousAlias: 'Wandering Wombat', anonymousAvatar: '🌿', identityRevealed: false },
-  { userId: 'demo-3', anonymousAlias: 'Bright Bilby', anonymousAvatar: '✨', identityRevealed: false },
-];
+const STORAGE_KEY = 'sidequest-social-state';
+const aliases = ['Curious Koala', 'Sunny Lorikeet', 'Cosmic Wombat', 'Mint Possum'];
+const avatars = ['🐨', '🦜', '🦔', '🐙'];
 
 export function createInitialSocialState(): SocialState {
+  const members: CrewMember[] = [
+    { userId: 'demo-1', anonymousAlias: 'Curious Koala', anonymousAvatar: '🐨' },
+    { userId: 'demo-2', anonymousAlias: 'Sunny Lorikeet', anonymousAvatar: '🦜' },
+    { userId: 'demo-3', anonymousAlias: 'Cosmic Wombat', anonymousAvatar: '🦔' },
+  ];
   return {
-    membersByEvent: Object.fromEntries([1, 2, 3, 4, 5].map(eventId => [eventId, seededMembers.map(member => ({ ...member, userId: `${member.userId}-${eventId}` }))])),
+    membersByEvent: { 1: members, 2: members.slice(0, 2), 3: members, 4: members.slice(0, 1), 5: members.slice(0, 2) },
     messagesByEvent: {
-      1: [
-        { id: 'seed-1', userId: 'demo-1-1', content: 'First time coming solo - meet at the front?', messageType: 'text', createdAt: '2026-08-29T16:42:00+10:00' },
-        { id: 'seed-2', userId: 'demo-2-1', content: '🙋☕➡️🏺', messageType: 'emoji', createdAt: '2026-08-29T16:43:00+10:00' },
-      ],
+      1: [{ id: 'welcome-1', userId: 'demo-1', content: 'Anyone else completely new to pottery? 👋', createdAt: new Date().toISOString() }],
     },
   };
 }
 
 export function loadSocialState(): SocialState {
-  const initial = createInitialSocialState();
-  const stored = window.localStorage.getItem(storageKey);
-  if (!stored) return initial;
   try {
-    const parsed = JSON.parse(stored) as SocialState;
-    return {
-      membersByEvent: { ...initial.membersByEvent, ...parsed.membersByEvent },
-      messagesByEvent: { ...initial.messagesByEvent, ...parsed.messagesByEvent },
-    };
+    const saved = window.localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) as SocialState : createInitialSocialState();
   } catch {
-    window.localStorage.removeItem(storageKey);
-    return initial;
+    return createInitialSocialState();
   }
 }
 
 export function saveSocialState(state: SocialState) {
-  window.localStorage.setItem(storageKey, JSON.stringify(state));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 export function isCurrentUser(member: CrewMember) {
-  return member.userId === currentUserId;
+  return member.userId === 'current-user';
 }
 
-export function joinEventCrew(state: SocialState, eventId: number, profile?: MemberProfile): SocialState {
-  const members = state.membersByEvent[eventId] ?? [];
-  if (members.some(isCurrentUser)) return state;
-  const [anonymousAlias, anonymousAvatar] = aliases[eventId % aliases.length];
-  return {
-    ...state,
-    membersByEvent: {
-      ...state.membersByEvent,
-      [eventId]: [...members, { userId: currentUserId, anonymousAlias, anonymousAvatar, identityRevealed: false, profile }],
-    },
+export function joinEventCrew(
+  state: SocialState,
+  eventId: number,
+  profile?: { displayName: string; major: string; semester: string },
+): SocialState {
+  const current = state.membersByEvent[eventId] ?? [];
+  if (current.some(isCurrentUser)) return state;
+  const slot = current.length % aliases.length;
+  const member: CrewMember = {
+    userId: 'current-user',
+    anonymousAlias: aliases[slot],
+    anonymousAvatar: avatars[slot],
+    ...profile,
   };
+  return { ...state, membersByEvent: { ...state.membersByEvent, [eventId]: [...current, member] } };
 }
 
 export function leaveEventCrew(state: SocialState, eventId: number): SocialState {
@@ -76,18 +63,23 @@ export function leaveEventCrew(state: SocialState, eventId: number): SocialState
 }
 
 export function addEventMessage(state: SocialState, eventId: number, content: string): SocialState {
-  const message: ChatMessage = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    userId: currentUserId,
-    content,
-    messageType: /^\p{Extended_Pictographic}+$/u.test(content.trim()) ? 'emoji' : 'text',
-    createdAt: new Date().toISOString(),
-  };
+  const messages = state.messagesByEvent[eventId] ?? [];
   return {
     ...state,
     messagesByEvent: {
       ...state.messagesByEvent,
-      [eventId]: [...(state.messagesByEvent[eventId] ?? []), message],
+      [eventId]: [...messages, { id: crypto.randomUUID(), userId: 'current-user', content, createdAt: new Date().toISOString() }],
+    },
+  };
+}
+
+export function addIncomingEventMessage(state: SocialState, eventId: number, userId: string, content: string): SocialState {
+  const messages = state.messagesByEvent[eventId] ?? [];
+  return {
+    ...state,
+    messagesByEvent: {
+      ...state.messagesByEvent,
+      [eventId]: [...messages, { id: crypto.randomUUID(), userId, content, createdAt: new Date().toISOString() }],
     },
   };
 }

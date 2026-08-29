@@ -17,9 +17,6 @@ DROP TABLE IF EXISTS login_history CASCADE;
 DROP TABLE IF EXISTS user_activity_log CASCADE;
 DROP TABLE IF EXISTS recommendations CASCADE;
 DROP TABLE IF EXISTS event_reviews CASCADE;
-DROP TABLE IF EXISTS group_messages CASCADE;
-DROP TABLE IF EXISTS event_group_members CASCADE;
-DROP TABLE IF EXISTS event_groups CASCADE;
 DROP TABLE IF EXISTS event_attendance CASCADE;
 DROP TABLE IF EXISTS event_faculties CASCADE;
 DROP TABLE IF EXISTS event_interests CASCADE;
@@ -62,7 +59,7 @@ CREATE TABLE users (
 
     user_id BIGSERIAL PRIMARY KEY,
 
-    username VARCHAR(50)
+    username VARCHAR(255)
         UNIQUE
         NOT NULL,
 
@@ -455,60 +452,6 @@ CREATE TABLE event_attendance (
         ON DELETE CASCADE
 );
 
-
--- ============================================================
--- 11A. EVENT CREWS
--- Identity is private by default and revealed per event crew.
--- ============================================================
-
-CREATE TABLE event_groups (
-    group_id BIGSERIAL PRIMARY KEY,
-    event_id BIGINT NOT NULL UNIQUE,
-    group_name VARCHAR(200) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_event_groups_event
-        FOREIGN KEY (event_id)
-        REFERENCES events(event_id)
-        ON DELETE CASCADE
-);
-
-CREATE TABLE event_group_members (
-    group_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
-    anonymous_alias VARCHAR(80) NOT NULL,
-    anonymous_avatar VARCHAR(20) NOT NULL,
-    identity_revealed BOOLEAN NOT NULL DEFAULT FALSE,
-    joined_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (group_id, user_id),
-    CONSTRAINT fk_event_group_members_group
-        FOREIGN KEY (group_id)
-        REFERENCES event_groups(group_id)
-        ON DELETE CASCADE,
-    CONSTRAINT fk_event_group_members_user
-        FOREIGN KEY (user_id)
-        REFERENCES users(user_id)
-        ON DELETE CASCADE
-);
-
-CREATE TABLE group_messages (
-    message_id BIGSERIAL PRIMARY KEY,
-    group_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
-    content TEXT NOT NULL CHECK (length(trim(content)) BETWEEN 1 AND 2000),
-    message_type VARCHAR(20) NOT NULL DEFAULT 'text'
-        CHECK (message_type IN ('emoji', 'text')),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_group_messages_membership
-        FOREIGN KEY (group_id, user_id)
-        REFERENCES event_group_members(group_id, user_id)
-        ON DELETE CASCADE
-);
-
-CREATE INDEX idx_event_group_members_user
-ON event_group_members(user_id);
-
-CREATE INDEX idx_group_messages_group_created
-ON group_messages(group_id, created_at);
 
 -- ============================================================
 -- 12. EVENT REVIEWS
@@ -2277,21 +2220,6 @@ LEFT JOIN faculties f
     ON u.faculty_id = f.faculty_id
 WHERE u.is_active = TRUE;
 
-CREATE VIEW v_event_crew_members AS
-SELECT
-    eg.event_id,
-    egm.group_id,
-    egm.user_id,
-    CASE WHEN egm.identity_revealed THEN up.display_name ELSE egm.anonymous_alias END AS display_name,
-    CASE WHEN egm.identity_revealed THEN up.avatar_url ELSE egm.anonymous_avatar END AS avatar,
-    CASE WHEN egm.identity_revealed THEN up.faculty_name ELSE NULL END AS faculty_name,
-    CASE WHEN egm.identity_revealed THEN up.year_level ELSE NULL END AS year_level,
-    egm.identity_revealed,
-    egm.joined_at
-FROM event_group_members egm
-JOIN event_groups eg ON eg.group_id = egm.group_id
-JOIN v_user_profiles up ON up.user_id = egm.user_id;
-
 
 -- ============================================================
 -- 36. EVENT DETAILS VIEW
@@ -3972,5 +3900,4 @@ ON FUNCTION save_recommendation(
     VARCHAR
 )
 TO campus_admin_role;
-
 
