@@ -77,9 +77,6 @@ export default function Home() {
   const [profileDraft, setProfileDraft] = useState<Profile>(emptyProfile);
   const [profileError, setProfileError] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
-  const [loginError, setLoginError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -246,19 +243,6 @@ export default function Home() {
     setEditingProfile(false);
     setSignupDismissed(true);
     setAuthPassword('');
-  };
-
-  const login = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setLoginError(''); setAuthBusy(true);
-    try {
-      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(loginForm) });
-      const result = await response.json() as { message?: string; profile?: Profile };
-      if (!response.ok || !result.profile) return setLoginError(result.message ?? 'Invalid email or password.');
-      const restored = { ...emptyProfile, ...result.profile };
-      setProfile(restored); setProfileDraft(restored); window.localStorage.setItem('sidequest-profile', JSON.stringify(restored));
-      setLoginOpen(false); setEditingProfile(false); setSignupDismissed(true); setLoginForm({ email: '', password: '' });
-    } catch { setLoginError('Could not connect to the login server.'); }
-    finally { setAuthBusy(false); }
   };
 
   const openProfile = () => {
@@ -646,12 +630,11 @@ export default function Home() {
           <fieldset className="social-tag-picker"><legend>My interests <span>Choose up to 6</span></legend><div>{interestOptions.map(item => { const active = profileDraft.interests.includes(item); return <button type="button" key={item} className={active ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, interests: active ? profileDraft.interests.filter(value => value !== item) : profileDraft.interests.length < 6 ? [...profileDraft.interests, item] : profileDraft.interests})}>{active ? '✓ ' : '+ '}{item}</button>; })}</div></fieldset>
           <fieldset className="social-tag-picker"><legend>Things I enjoy doing <span>Choose up to 6</span></legend><div>{activityOptions.map(item => { const active = profileDraft.favouriteActivities.includes(item); return <button type="button" key={item} className={active ? 'selected' : ''} onClick={() => setProfileDraft({...profileDraft, favouriteActivities: active ? profileDraft.favouriteActivities.filter(value => value !== item) : profileDraft.favouriteActivities.length < 6 ? [...profileDraft.favouriteActivities, item] : profileDraft.favouriteActivities})}>{active ? '✓ ' : '+ '}{item}</button>; })}</div></fieldset>
           <button className="signup-submit" type="submit" disabled={authBusy}>{authBusy ? 'Connecting securely…' : profile ? 'Save my profile →' : 'Create my profile →'}</button>
-          {!profile && <button className="login-under-profile" type="button" onClick={() => { setEditingProfile(false); setSignupDismissed(true); setLoginOpen(true); setLoginError(''); }}>Already have an account? <b>Log in</b></button>}
+          {!profile && <button className="login-under-profile" type="button" onClick={() => { window.location.href = '/login'; }}>Already have an account? <b>Log in</b></button>}
           {profile && <button className="signup-cancel" type="button" onClick={() => setEditingProfile(false)}>Cancel</button>}
         </form>
       </section>
     </div>}
-    {loginOpen && <div className="signup-backdrop"><section className="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title"><button className="signup-close" onClick={() => setLoginOpen(false)} aria-label="Close login">×</button><p className="eyebrow">WELCOME BACK</p><h2 id="login-title">Log in to Sidequest</h2><p>Your password is verified securely by PostgreSQL. Failed attempts are rate-limited and may temporarily lock the account.</p><form onSubmit={login}><label>University email<input required type="email" autoComplete="email" value={loginForm.email} onChange={event => { setLoginForm({...loginForm,email:event.target.value}); setLoginError(''); }} placeholder="student@uni.sydney.edu.au" /></label><label>Password<input required type="password" autoComplete="current-password" value={loginForm.password} onChange={event => { setLoginForm({...loginForm,password:event.target.value}); setLoginError(''); }} /></label>{loginError && <div className="login-error" role="alert">{loginError}</div>}<button className="signup-submit" disabled={authBusy}>{authBusy ? 'Checking account…' : 'Log in securely →'}</button><button className="signup-cancel" type="button" onClick={() => { setLoginOpen(false); setEditingProfile(true); setSignupDismissed(false); }}>Create a new profile</button></form></section></div>}
     {viewedMember && <div className="signup-backdrop"><section className="social-profile-card" role="dialog" aria-modal="true" aria-labelledby="social-profile-name"><button className="signup-close" onClick={() => setViewedMember(null)} aria-label="Close social profile">×</button><div className="social-profile-hero"><span><AvatarVisual value={viewedMember.profileAvatar ?? viewedMember.anonymousAvatar} /></span><p className="eyebrow">SOCIAL PROFILE</p><h2 id="social-profile-name">{viewedMember.displayName ?? viewedMember.anonymousAlias}</h2><p>{viewedMember.major ?? 'USYD student'}{viewedMember.semester ? ` · ${viewedMember.semester}` : ''}</p></div><div className="social-profile-content"><h3>About me</h3><p>{viewedMember.bio || 'This student has not added an introduction yet.'}</p><h3>Interests</h3><div className="profile-chips">{viewedMember.interests?.length ? viewedMember.interests.map(item => <span key={item}>{item}</span>) : <small>No interests shared yet.</small>}</div><h3>Things I enjoy doing</h3><div className="profile-chips activities">{viewedMember.favouriteActivities?.length ? viewedMember.favouriteActivities.map(item => <span key={item}>{item}</span>) : <small>No favourite activities shared yet.</small>}</div>{!isCurrentUser(viewedMember) && <button className="signup-submit" onClick={() => { setViewedMember(null); openFriendChat(viewedMember); }}>{friends.includes(viewedMember.userId) ? 'Message' : 'Say hello'} →</button>}{isCurrentUser(viewedMember) && <button className="signup-submit" onClick={() => { setViewedMember(null); openProfile(); }}>Edit my profile →</button>}<small className="profile-privacy">Only details you choose to share appear here. Email and phone number stay private.</small></div></section></div>}
   </main>;
 }
