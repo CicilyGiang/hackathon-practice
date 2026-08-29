@@ -276,8 +276,8 @@ export default function Home() {
   };
 
   const signOut = () => {
-    void fetch('/api/auth/logout', { method: 'POST' });
     if (!window.confirm('Sign out and remove this Sidequest account’s locally stored profile, chats and preferences from this device?')) return;
+    void fetch('/api/auth/logout', { method: 'POST' });
     [
       'sidequest-profile', 'sidequest-membership-plan', 'sidequest-event-reminders',
       'sidequest-saved-events', 'sidequest-custom-events', 'sidequest-friends',
