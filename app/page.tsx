@@ -227,13 +227,17 @@ export default function Home() {
       return;
     }
     if (!profile) {
-      setAuthBusy(true);
-      try {
-        const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...clean, password: authPassword }) });
-        const result = await response.json() as { message?: string };
-        if (!response.ok) { setProfileError(result.message ?? 'Account creation failed.'); return; }
-      } catch { setProfileError('Could not connect to the login server.'); return; }
-      finally { setAuthBusy(false); }
+      // Local-only account check: this previously POSTed to /api/auth/register,
+      // which needs a shared PostgreSQL server reachable over Tailscale (see
+      // TEAM_DATABASE_SETUP.md). That backend route is untouched and still in
+      // the repo if the team wants to reconnect it later, but for day-to-day
+      // solo testing this validates and stores the account entirely on this
+      // device, the same way every other hackathon feature already does.
+      if (authPassword.length < 8 || !/[A-Z]/.test(authPassword) || !/[a-z]/.test(authPassword) || !/\d/.test(authPassword)) {
+        setProfileError('Password must be at least 8 characters with upper-case, lower-case and a number.');
+        return;
+      }
+      window.localStorage.setItem('sidequest-local-account', JSON.stringify({ email: clean.email.trim().toLowerCase(), password: authPassword }));
     }
     setProfileError('');
     window.localStorage.setItem('sidequest-profile', JSON.stringify(clean));

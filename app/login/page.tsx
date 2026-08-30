@@ -24,13 +24,23 @@ export default function LoginPage() {
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(''); setBusy(true);
+    // Local-only check: this previously POSTed to /api/auth/login against a
+    // shared PostgreSQL server (see TEAM_DATABASE_SETUP.md). That backend
+    // route is untouched and still in the repo if the team wants to
+    // reconnect it later; this device now checks against whatever account
+    // was created locally through "Create your profile", so login works
+    // with no database or Tailscale setup required.
     try {
-      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
-      const result = await response.json() as { message?: string; profile?: LoginProfile };
-      if (!response.ok || !result.profile) return setError(result.message ?? 'Invalid email or password.');
-      window.localStorage.setItem('sidequest-profile', JSON.stringify(result.profile));
+      const email = form.email.trim().toLowerCase();
+      const account = JSON.parse(window.localStorage.getItem('sidequest-local-account') ?? 'null') as { email: string; password: string } | null;
+      const savedProfile = JSON.parse(window.localStorage.getItem('sidequest-profile') ?? 'null') as LoginProfile | null;
+      if (!account || !savedProfile || account.email !== email || account.password !== form.password) {
+        setError('Invalid email or password.');
+        return;
+      }
+      window.localStorage.setItem('sidequest-profile', JSON.stringify(savedProfile));
       window.location.href = '/';
-    } catch { setError('Could not connect to the login server. Please try again.'); }
+    } catch { setError('Could not check your saved account. Please try again.'); }
     finally { setBusy(false); }
   };
 
