@@ -40,6 +40,7 @@ export default function ScheduleGapPlanner({ onActivate }: { onActivate: (activi
   return <>
     <section className={`schedule-gap-card ${gap ? 'has-gap' : ''}`}>
       <div><span>▦</span><p><b>{gap ? `${gap.availableMinutes}-minute verified gap` : 'Connect your class schedule'}</b>{gap ? `Before ${gap.next.title} at ${gap.next.startTime}` : 'We only suggest hangouts when your timetable confirms you are free.'}</p></div>
+      <span className="privacy-credit" title="Your class schedule is only ever read on this device to compute a gap — it is never uploaded or shared.">🔒 Timetable stays on this device</span>
       {gap && <button onClick={() => onActivate(gap.suggestedActivity, Math.min(gap.availableMinutes - 10, 120))}>Go free for {gap.suggestedActivity.toLowerCase()}</button>}
       <button className="manage-schedule" onClick={() => setOpen(true)}>{schedule.length ? 'Manage schedule' : 'Add classes'}</button>
     </section>
@@ -48,6 +49,7 @@ export default function ScheduleGapPlanner({ onActivate }: { onActivate: (activi
       <button className="signup-close" onClick={() => setOpen(false)}>×</button>
       <p className="eyebrow">PRIVATE TIMETABLE</p><h2 id="schedule-title">Find the gaps between classes.</h2>
       <p>Your timetable stays on this device. Other students see only a Free status you actively publish.</p>
+      <span className="privacy-credit">🔒 Never uploaded · never shared · computed locally, every time</span>
       <div className="schedule-privacy-options"><label><input type="checkbox" checked={onCampus} onChange={event => setOnCampus(event.target.checked)}/> I am on campus</label><label><input type="checkbox" checked={suggestionsEnabled} onChange={event => setSuggestionsEnabled(event.target.checked)}/> Suggest social gaps</label></div>
       <form className="schedule-form" onSubmit={addClass}>
         <label>Class name<input required value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} placeholder="INFO1110 Tutorial"/></label>

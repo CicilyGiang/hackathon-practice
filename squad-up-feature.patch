@@ -1,0 +1,226 @@
+diff --git a/app/HangoutHub.tsx b/app/HangoutHub.tsx
+index d472931..6219f15 100644
+--- a/app/HangoutHub.tsx
++++ b/app/HangoutHub.tsx
+@@ -9,7 +9,13 @@ type TrustedPerson = { id: string; name: string; avatar: string; relation: 'Frie
+ type FriendRequest = { id: string; name: string; contact: string; method: 'Email' | 'Phone' | 'QR code'; direction: 'incoming' | 'outgoing'; status: 'Pending' | 'Accepted' | 'Declined' };
+ type HangoutRequest = { id: string; personId: string; activity: string; venue: string; message: string; direction: 'incoming' | 'outgoing'; status: 'Pending' | 'Accepted' | 'Declined' };
+ type FreeStatus = { enabled: boolean; activity: string; venue: string; visibility: 'Friends only' | 'Friends + selected clubs'; expiresAt: string };
+-type HubState = { friendIds: string[]; friendRequests: FriendRequest[]; hangoutRequests: HangoutRequest[]; freeStatus: FreeStatus };
++// Group formation: a "squad" is a spontaneous multi-person hangout formed from
++// whoever is currently free (visiblePeople), not a scheduled event crew. Kept
++// as additive fields on HubState so existing friend/hangout/free-status logic
++// is untouched.
++type GroupMessage = { id: string; personId: string; text: string; createdAt: string };
++type SquadHangout = { id: string; activity: string; venue: string; message: string; memberIds: string[]; createdAt: string; status: 'Open' | 'Closed' };
++type HubState = { friendIds: string[]; friendRequests: FriendRequest[]; hangoutRequests: HangoutRequest[]; freeStatus: FreeStatus; squads: SquadHangout[]; squadMessages: Record<string, GroupMessage[]> };
+ 
+ const people: TrustedPerson[] = [
+   { id: 'maya', name: 'Maya Chen', avatar: '🌻', relation: 'Friend', activity: 'Coffee · Walk', note: 'Finished class early—anyone nearby?', venue: 'Near Fisher Library', until: '5:30 PM', lat: -33.8864, lng: 151.1907 },
+@@ -22,6 +28,8 @@ const initialState: HubState = {
+   friendRequests: [{ id: 'incoming-1', name: 'Ethan Lee', contact: 'Photography Society', method: 'QR code', direction: 'incoming', status: 'Pending' }],
+   hangoutRequests: [{ id: 'hangout-incoming', personId: 'maya', activity: 'Coffee Catch-up', venue: 'Courtyard Café', message: 'I’m free after class. Want to grab coffee?', direction: 'incoming', status: 'Pending' }],
+   freeStatus: { enabled: false, activity: 'Coffee', venue: 'University Main Quad', visibility: 'Friends only', expiresAt: '' },
++  squads: [],
++  squadMessages: {},
+ };
+ 
+ export default function HangoutHub() {
+@@ -42,8 +50,13 @@ export default function HangoutHub() {
+   const [messages, setMessages] = useState<Record<string, { id: string; mine: boolean; text: string }[]>>({});
+   const [notice, setNotice] = useState('');
+   const [clock, setClock] = useState(Date.now());
++  const [squadOpen, setSquadOpen] = useState(false);
++  const [squadSelection, setSquadSelection] = useState<string[]>([]);
++  const [squadDraft, setSquadDraft] = useState({ activity: 'Coffee Catch-up', venue: 'Courtyard Café', message: '' });
++  const [squadChatId, setSquadChatId] = useState<string | null>(null);
++  const [squadChatDraft, setSquadChatDraft] = useState('');
+ 
+-  useEffect(() => { try { const saved = JSON.parse(window.localStorage.getItem('sidequest-hangout-hub') ?? 'null') as HubState | null; if (saved) setState(saved); } catch { window.localStorage.removeItem('sidequest-hangout-hub'); } setReady(true); }, []);
++  useEffect(() => { try { const saved = JSON.parse(window.localStorage.getItem('sidequest-hangout-hub') ?? 'null') as HubState | null; if (saved) setState({ ...initialState, ...saved, squads: saved.squads ?? [], squadMessages: saved.squadMessages ?? {} }); } catch { window.localStorage.removeItem('sidequest-hangout-hub'); } setReady(true); }, []);
+   useEffect(() => { void QRCode.toDataURL(`https://sidequest.local/friend/${inviteCode}`, { width: 220, margin: 2, color: { dark: '#18201c', light: '#ffffff' } }).then(setQrUrl); }, [inviteCode]);
+   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 30000); return () => window.clearInterval(timer); }, []);
+ 
+@@ -51,7 +64,51 @@ export default function HangoutHub() {
+   useEffect(() => { if (!state.freeStatus.enabled || freeActive || !state.freeStatus.expiresAt) return; save({ ...state, freeStatus: { ...state.freeStatus, enabled: false } }); setNotice('Your “Free to hang out” status expired automatically.'); }, [clock, freeActive, state]);
+ 
+   const save = (next: HubState) => { setState(next); window.localStorage.setItem('sidequest-hangout-hub', JSON.stringify(next)); };
++  // Same functional-update + persist pattern as lib/social-storage.ts's updateSocial in
++  // app/page.tsx, used here so staggered setTimeout-based "X joined" messages never
++  // clobber each other by writing from a stale `state` closure.
++  const updateState = (update: (current: HubState) => HubState) => { setState(current => { const next = update(current); window.localStorage.setItem('sidequest-hangout-hub', JSON.stringify(next)); return next; }); };
+   const visiblePeople = useMemo(() => people.filter(person => person.relation === 'Friend' ? state.friendIds.includes(person.id) : true), [state.friendIds]);
++  const squads = state.squads;
++  const squadMembers = (squad: SquadHangout) => squad.memberIds.filter(id => id !== 'me').map(id => people.find(person => person.id === id)).filter((person): person is TrustedPerson => Boolean(person));
++  const activeSquad = squads.find(squad => squad.id === squadChatId) ?? null;
++
++  const toggleSquadPick = (id: string) => setSquadSelection(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
++
++  const createSquad = (event: FormEvent<HTMLFormElement>) => {
++    event.preventDefault();
++    if (squadSelection.length < 2) return; // a squad is a group, not another 1:1 hangout
++    const id = crypto.randomUUID();
++    const picked = squadSelection;
++    const squad: SquadHangout = { id, activity: squadDraft.activity, venue: squadDraft.venue, message: squadDraft.message, memberIds: ['me', ...picked], createdAt: new Date().toISOString(), status: 'Open' };
++    const opening: GroupMessage = { id: crypto.randomUUID(), personId: 'me', text: squadDraft.message || `Anyone keen for ${squadDraft.activity.toLowerCase()} at ${squadDraft.venue}?`, createdAt: new Date().toISOString() };
++    save({ ...state, squads: [squad, ...squads], squadMessages: { ...state.squadMessages, [id]: [opening] } });
++    setSquadOpen(false);
++    setSquadChatId(id);
++    setNotice(`Squad started with ${picked.length} people. Waiting for them to join in.`);
++    setSquadSelection([]);
++    picked.forEach((personId, index) => {
++      const person = people.find(item => item.id === personId);
++      if (!person) return;
++      window.setTimeout(() => {
++        const joinMessage: GroupMessage = { id: crypto.randomUUID(), personId: person.id, text: index === 0 ? `I’m in, see you there! 👋` : `Count me in too.`, createdAt: new Date().toISOString() };
++        updateState(current => ({ ...current, squadMessages: { ...current.squadMessages, [id]: [...(current.squadMessages[id] ?? []), joinMessage] } }));
++      }, 900 + index * 700);
++    });
++  };
++
++  const sendSquadMessage = () => {
++    if (!activeSquad || !squadChatDraft.trim()) return;
++    const message: GroupMessage = { id: crypto.randomUUID(), personId: 'me', text: squadChatDraft.trim(), createdAt: new Date().toISOString() };
++    updateState(current => ({ ...current, squadMessages: { ...current.squadMessages, [activeSquad.id]: [...(current.squadMessages[activeSquad.id] ?? []), message] } }));
++    setSquadChatDraft('');
++  };
++
++  const leaveSquad = (id: string) => {
++    updateState(current => ({ ...current, squads: current.squads.map(item => item.id === id ? { ...item, status: 'Closed' } : item) }));
++    if (squadChatId === id) setSquadChatId(null);
++    setNotice('You left the squad.');
++  };
+ 
+   const publishFree = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); const minutes = Number(form.get('duration')); const next = { ...state.freeStatus, enabled: true, activity: String(form.get('activity')), venue: String(form.get('venue')), visibility: String(form.get('visibility')) as FreeStatus['visibility'], expiresAt: new Date(Date.now() + minutes * 60000).toISOString() }; save({ ...state, freeStatus: next }); setFreeOpen(false); setNotice(`You are visible to ${next.visibility.toLowerCase()} for ${minutes} minutes.`); };
+   const publishFromGap = (activity: string, durationMinutes: number) => { const next = { ...state.freeStatus, enabled: true, activity, expiresAt: new Date(Date.now() + durationMinutes * 60000).toISOString() }; save({ ...state, freeStatus: next }); setNotice(`Your timetable confirms this gap. You are visible for ${durationMinutes} minutes.`); };
+@@ -74,8 +131,9 @@ export default function HangoutHub() {
+     {friendsListOpen && <div className="signup-backdrop"><section className="friends-list-modal"><button className="signup-close" onClick={() => setFriendsListOpen(false)}>×</button><p className="eyebrow">MY TRUSTED CONNECTIONS</p><h2>My friends</h2><p>These people accepted your friend request. They only appear on the map when they actively share availability.</p><div className="friends-list-grid">{currentFriends.map(friend => <article key={friend.id}><span>{friend.avatar}</span><div><b>{friend.name}</b><small>{friend.detail}</small></div><i className={friend.available ? 'online' : ''}>{friend.available ? 'Free now' : 'Offline'}</i><button onClick={() => { const person = people.find(item => item.id === friend.id); if (person) { setSelected(person); setFriendsListOpen(false); } else setNotice(`${friend.name} is not currently sharing availability.`); }}>View</button></article>)}</div><div className="shared-club-list"><h3>Shared clubs</h3><article><span>📷</span><div><b>Photography Society</b><small>Noah Williams is free now</small></div><i>Verified club</i></article></div><button className="add-from-list" onClick={() => { setFriendsListOpen(false); setFriendOpen(true); }}>＋ Add another friend</button></section></div>}
+     <header className="hangout-hero"><div><p className="eyebrow">TRUSTED CIRCLES · SPONTANEOUS PLANS</p><h1>See who’s free.<br/><em>Make it happen.</em></h1><p>Only friends and verified shared-club members can appear here. Every location is a public meetup area—not anyone’s live GPS.</p></div><div className={`my-free-card ${freeActive ? 'active' : ''}`}><span>{freeActive ? '● YOU ARE VISIBLE' : '○ YOU ARE HIDDEN'}</span><h2>{freeActive ? `Free for ${state.freeStatus.activity}` : 'Ready when you are.'}</h2><p>{freeActive ? `${state.freeStatus.venue} · ${state.freeStatus.visibility}` : 'Your availability is never shared automatically.'}</p><div><button onClick={() => setFreeOpen(true)}>{freeActive ? 'Edit status' : '+ I’m free'}</button>{freeActive && <button className="stop" onClick={() => { save({ ...state, freeStatus: { ...state.freeStatus, enabled: false } }); setNotice('You stopped sharing your availability.'); }}>Stop sharing</button>}</div></div></header>
+     <ScheduleGapPlanner onActivate={publishFromGap}/>
+-    <div className="hangout-actions"><div><b>{visiblePeople.length} trusted people are free</b><span>{currentFriends.length} friends · 1 shared club member</span></div><div className="friend-action-buttons"><button onClick={() => setFriendsListOpen(true)}>My friends ({currentFriends.length})</button><button onClick={() => setFriendOpen(true)}>＋ Add friends {incomingFriends.length > 0 && <i>{incomingFriends.length}</i>}</button></div></div>
++    <div className="hangout-actions"><div><b>{visiblePeople.length} trusted people are free</b><span>{currentFriends.length} friends · 1 shared club member</span></div><div className="friend-action-buttons"><button onClick={() => setFriendsListOpen(true)}>My friends ({currentFriends.length})</button><button onClick={() => setFriendOpen(true)}>＋ Add friends {incomingFriends.length > 0 && <i>{incomingFriends.length}</i>}</button><button className="squad-up" disabled={visiblePeople.length < 2} title={visiblePeople.length < 2 ? 'Need at least 2 trusted people free to squad up' : undefined} onClick={() => setSquadOpen(true)}>✦ Squad up</button></div></div>
+     {notice && <div className="hangout-notice" role="status">✦ {notice}<button onClick={() => setNotice('')}>×</button></div>}
++    {squads.filter(squad => squad.status === 'Open').length > 0 && <div className="squad-list" aria-label="My squads"><b>My squads</b>{squads.filter(squad => squad.status === 'Open').map(squad => <button key={squad.id} className="squad-chip" onClick={() => setSquadChatId(squad.id)}><span>{squad.activity}</span><small>{squadMembers(squad).length + 1} people · {squad.venue}</small></button>)}</div>}
+     {incomingHangouts.map(request => { const person = people.find(item => item.id === request.personId)!; return <div className="incoming-hangout" key={request.id}><span>{person.avatar}</span><div><small>HANGOUT REQUEST</small><b>{person.name} invited you to {request.activity}</b><p>{request.message} · {request.venue}</p></div><button onClick={() => respondHangout(request.id, true)}>Accept</button><button className="decline" onClick={() => respondHangout(request.id, false)}>Not today</button></div>; })}
+     <div className="hangout-workspace"><div className="hangout-map-wrap"><TrustedMap people={visiblePeople} selectedId={selected.id} onSelect={id => setSelected(visiblePeople.find(item => item.id === id) ?? visiblePeople[0])}/><div className="map-privacy">⌖ Approximate public meetup areas only</div></div><aside className="free-person-card"><div className="relationship">{selected.relation === 'Friend' ? '✓ FRIEND' : `◎ SHARED CLUB · ${selected.club}`}</div><span className="person-avatar">{selected.avatar}</span><h2>{selected.name}</h2><p className="availability">● Free until {selected.until}</p><div className="person-info"><span><b>Interested in</b>{selected.activity}</span><span><b>Meetup area</b>{selected.venue}</span></div><blockquote>“{selected.note}”</blockquote><button className="ask-hangout" onClick={() => { setRequestDraft(current => ({...current,message:`Hey ${selected.name.split(' ')[0]}! I’m also free. Want to hang out?`})); setRequestOpen(true); }}>Ask to hang out →</button><button className="privacy-secondary" onClick={() => setNotice(`${selected.name} is visible because they are your ${selected.relation.toLowerCase()}${selected.club ? ` in ${selected.club}` : ''}.`)}>Why can I see this person?</button></aside></div>
+ 
+@@ -83,6 +141,10 @@ export default function HangoutHub() {
+ 
+     {requestOpen && <div className="signup-backdrop"><section className="hangout-modal"><button className="signup-close" onClick={() => setRequestOpen(false)}>×</button><p className="eyebrow">HANGOUT REQUEST</p><h2>Ask {selected.name.split(' ')[0]} to hang out.</h2><p>They must accept before a private chat opens.</p><form onSubmit={sendHangout}><label>Plan<select value={requestDraft.activity} onChange={event => setRequestDraft({...requestDraft,activity:event.target.value})}>{['Coffee Catch-up','Take a Walk','Study Break','Lunch Together','Something else'].map(item => <option key={item}>{item}</option>)}</select></label><label>Suggested public venue<input required value={requestDraft.venue} onChange={event => setRequestDraft({...requestDraft,venue:event.target.value})}/></label><label>Message<textarea required value={requestDraft.message} onChange={event => setRequestDraft({...requestDraft,message:event.target.value})}/></label><button className="signup-submit">Send request →</button></form></section></div>}
+ 
++    {squadOpen && <div className="signup-backdrop"><section className="hangout-modal"><button className="signup-close" onClick={() => { setSquadOpen(false); setSquadSelection([]); }}>×</button><p className="eyebrow">SQUAD UP</p><h2>Turn “free right now” into a group.</h2><p>Pick everyone who’s currently free and start one shared plan instead of asking one at a time.</p><form onSubmit={createSquad}><fieldset className="tag-picker"><legend>Who’s free right now? <span>Pick at least 2</span></legend><div>{visiblePeople.map(person => { const active = squadSelection.includes(person.id); return <button type="button" key={person.id} className={active ? 'selected' : ''} aria-pressed={active} onClick={() => toggleSquadPick(person.id)}>{active ? '✓ ' : '+ '}{person.avatar} {person.name.split(' ')[0]}</button>; })}</div></fieldset><label>Plan<select value={squadDraft.activity} onChange={event => setSquadDraft({...squadDraft,activity:event.target.value})}>{['Coffee Catch-up','Take a Walk','Study Break','Lunch Together','Something else'].map(item => <option key={item}>{item}</option>)}</select></label><label>Suggested public venue<input required value={squadDraft.venue} onChange={event => setSquadDraft({...squadDraft,venue:event.target.value})}/></label><label>Message<textarea value={squadDraft.message} onChange={event => setSquadDraft({...squadDraft,message:event.target.value})} placeholder={`Anyone keen for ${squadDraft.activity.toLowerCase()}?`}/></label><button className="signup-submit" disabled={squadSelection.length < 2}>{squadSelection.length < 2 ? 'Pick at least 2 people' : `Start squad with ${squadSelection.length} people →`}</button><small>Everyone you pick must already be free and visible to you — same trust rule as a 1:1 hangout.</small></form></section></div>}
++
++    {activeSquad && <section className="chat-card hangout-chat squad-chat" aria-label={`${activeSquad.activity} squad chat`}><header><div><b>✦ {activeSquad.activity} squad</b><small><i/> {squadMembers(activeSquad).length + 1} people · {activeSquad.venue}</small></div><button onClick={() => setSquadChatId(null)} aria-label="Close squad chat">×</button></header><div className="chat-context"><span>{squadMembers(activeSquad).map(member => member.avatar).join(' ')}</span><p><b>{activeSquad.venue}</b><br/>{squadMembers(activeSquad).map(member => member.name.split(' ')[0]).join(', ')} + you</p><button onClick={() => leaveSquad(activeSquad.id)}>Leave</button></div><div className="messages">{(state.squadMessages[activeSquad.id] ?? []).map(message => { const mine = message.personId === 'me'; const sender = people.find(person => person.id === message.personId); return <div className={mine ? 'outgoing' : 'incoming'} key={message.id}>{!mine && <span title={sender?.name}>{sender?.avatar ?? '🎭'}</span>}<p>{message.text}</p></div>; })}</div><div className="composer"><input value={squadChatDraft} onChange={event => setSquadChatDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && sendSquadMessage()} placeholder="Message the squad…"/><button className="send" onClick={sendSquadMessage} aria-label="Send message to squad">↑</button></div></section>}
++
+     {friendOpen && <div className="signup-backdrop"><section className="friend-modal"><button className="signup-close" onClick={() => setFriendOpen(false)}>×</button><div className="friend-modal-head"><p className="eyebrow">TRUSTED CONNECTIONS</p><h2>Add a friend</h2><p>Every request stays pending until the other person accepts.</p></div><div className="friend-methods">{(['Email','Phone','QR code'] as const).map(method => <button className={contactMethod === method ? 'active' : ''} onClick={() => setContactMethod(method)} key={method}>{method === 'Email' ? '✉ ' : method === 'Phone' ? '☎ ' : '▦ '}{method}</button>)}</div>{contactMethod === 'QR code' ? <div className="qr-friend"><div>{qrUrl && <img src={qrUrl} alt="Scannable Sidequest friend QR code"/>}<small>YOUR FRIEND QR</small></div><p>Let your friend scan this code, or enter a code you scanned from them.</p><form onSubmit={sendFriendRequest}><label>Scanned friend code<input required value={contact} onChange={event => setContact(event.target.value)} placeholder="SIDEQUEST-MAYA-1234"/></label><button className="signup-submit">Send QR friend request</button></form><button className="new-code" onClick={() => setInviteCode(`SIDEQUEST-LIHUA-${Math.random().toString(36).slice(2,6).toUpperCase()}`)}>Generate a new QR</button></div> : <form className="friend-contact-form" onSubmit={sendFriendRequest}><label>{contactMethod === 'Email' ? 'Friend’s email address' : 'Friend’s phone number'}<input required type={contactMethod === 'Email' ? 'email' : 'tel'} value={contact} onChange={event => setContact(event.target.value)} placeholder={contactMethod === 'Email' ? 'friend@uni.edu.au' : '04XX XXX XXX'}/></label><button className="signup-submit">Send friend request →</button></form>}<div className="request-list"><h3>Incoming requests</h3>{incomingFriends.length === 0 ? <p>No pending requests.</p> : incomingFriends.map(request => <div key={request.id}><span>🪴</span><p><b>{request.name}</b><small>{request.method} · {request.contact}</small></p><button onClick={() => respondFriend(request.id,true)}>Accept</button><button className="decline" onClick={() => respondFriend(request.id,false)}>Decline</button></div>)}<h3>Sent requests</h3>{state.friendRequests.filter(item => item.direction === 'outgoing').slice(0,3).map(request => <div key={request.id}><span>◷</span><p><b>{request.contact}</b><small>{request.method} · {request.status}</small></p></div>)}</div></section></div>}
+ 
+     {chatPerson && <section className="chat-card hangout-chat"><header><div><b>{chatPerson.avatar} {chatPerson.name}</b><small><i/> Hangout accepted · private planning chat</small></div><button onClick={() => setChatPerson(null)}>×</button></header><div className="chat-context"><span>☕</span><p><b>Public meetup</b><br/>Courtyard Café · Today</p><button>Plan</button></div><div className="messages">{(messages[chatPerson.id] ?? []).map(message => <div className={message.mine ? 'outgoing' : 'incoming'} key={message.id}>{!message.mine && <span>{chatPerson.avatar}</span>}<p>{message.text}</p></div>)}</div><div className="quick-emojis">{['I’m here','On my way','10 min late'].map(text => <button key={text} onClick={() => { setChatDraft(text); }}>{text}</button>)}</div><div className="composer"><input value={chatDraft} onChange={event => setChatDraft(event.target.value)} onKeyDown={event => event.key === 'Enter' && sendMessage()} placeholder="Plan your hangout…"/><button className="send" onClick={sendMessage}>↑</button></div></section>}
+diff --git a/app/ScheduleGapPlanner.tsx b/app/ScheduleGapPlanner.tsx
+index 52e878b..9f650e4 100644
+--- a/app/ScheduleGapPlanner.tsx
++++ b/app/ScheduleGapPlanner.tsx
+@@ -40,6 +40,7 @@ export default function ScheduleGapPlanner({ onActivate }: { onActivate: (activi
+   return <>
+     <section className={`schedule-gap-card ${gap ? 'has-gap' : ''}`}>
+       <div><span>▦</span><p><b>{gap ? `${gap.availableMinutes}-minute verified gap` : 'Connect your class schedule'}</b>{gap ? `Before ${gap.next.title} at ${gap.next.startTime}` : 'We only suggest hangouts when your timetable confirms you are free.'}</p></div>
++      <span className="privacy-credit" title="Your class schedule is only ever read on this device to compute a gap — it is never uploaded or shared.">🔒 Timetable stays on this device</span>
+       {gap && <button onClick={() => onActivate(gap.suggestedActivity, Math.min(gap.availableMinutes - 10, 120))}>Go free for {gap.suggestedActivity.toLowerCase()}</button>}
+       <button className="manage-schedule" onClick={() => setOpen(true)}>{schedule.length ? 'Manage schedule' : 'Add classes'}</button>
+     </section>
+@@ -48,6 +49,7 @@ export default function ScheduleGapPlanner({ onActivate }: { onActivate: (activi
+       <button className="signup-close" onClick={() => setOpen(false)}>×</button>
+       <p className="eyebrow">PRIVATE TIMETABLE</p><h2 id="schedule-title">Find the gaps between classes.</h2>
+       <p>Your timetable stays on this device. Other students see only a Free status you actively publish.</p>
++      <span className="privacy-credit">🔒 Never uploaded · never shared · computed locally, every time</span>
+       <div className="schedule-privacy-options"><label><input type="checkbox" checked={onCampus} onChange={event => setOnCampus(event.target.checked)}/> I am on campus</label><label><input type="checkbox" checked={suggestionsEnabled} onChange={event => setSuggestionsEnabled(event.target.checked)}/> Suggest social gaps</label></div>
+       <form className="schedule-form" onSubmit={addClass}>
+         <label>Class name<input required value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} placeholder="INFO1110 Tutorial"/></label>
+diff --git a/app/hangout.css b/app/hangout.css
+index 5047b65..ae74f8e 100644
+--- a/app/hangout.css
++++ b/app/hangout.css
+@@ -1 +1,59 @@
+ .hangout-active>.hero-row,.hangout-active>.controls,.hangout-active>.workspace,.hangout-active>.chat-launch{display:none}.hangout-hub{padding:38px 6px 50px}.hangout-hero{display:grid;grid-template-columns:1fr 410px;align-items:end;gap:35px;padding:24px 8px 30px}.hangout-hero h1{margin-bottom:18px}.hangout-hero>div:first-child>p:last-child{max-width:640px;margin:0;color:#626863;font-size:13px;line-height:1.55}.my-free-card{padding:20px;border:1px solid #d7d2c8;border-radius:20px;background:#fff}.my-free-card.active{border-color:#58b98f;background:#ecfaf3}.my-free-card>span{color:#777;font-size:8px;font-weight:900;letter-spacing:1px}.my-free-card.active>span{color:#23835e}.my-free-card h2{margin:9px 0 5px;font-size:20px}.my-free-card p{margin:0;color:#717672;font-size:9px}.my-free-card>div{display:flex;gap:7px;margin-top:14px}.my-free-card button{border:0;border-radius:9px;background:#18201c;color:#fff;padding:9px 12px;font-size:9px;font-weight:900}.my-free-card button.stop{border:1px solid #d0cbc1;background:#fff;color:#525853}.hangout-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:13px}.hangout-actions b,.hangout-actions span{display:block}.hangout-actions b{font-size:12px}.hangout-actions span{margin-top:3px;color:#777c78;font-size:9px}.hangout-actions>button{position:relative;border:0;border-radius:20px;background:#775cff;color:#fff;padding:10px 14px;font-size:10px;font-weight:900}.hangout-actions i{position:absolute;right:-5px;top:-6px;width:18px;height:18px;display:grid;place-items:center;border:2px solid #f5f0e7;border-radius:50%;background:#ff6857;font-size:8px;font-style:normal}.hangout-notice{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:11px 14px;border-radius:11px;background:#eeeaff;color:#5b42c8;font-size:10px;font-weight:800}.hangout-notice button{border:0;background:transparent;font-size:18px}.incoming-hangout{display:grid;grid-template-columns:42px 1fr auto auto;align-items:center;gap:11px;margin-bottom:12px;padding:11px 13px;border:1px solid #e3c66b;border-radius:14px;background:#fff8df}.incoming-hangout>span{font-size:27px}.incoming-hangout small,.incoming-hangout b{display:block}.incoming-hangout small{color:#9c7000;font-size:7px;font-weight:900;letter-spacing:1px}.incoming-hangout b{margin:3px 0;font-size:10px}.incoming-hangout p{margin:0;color:#747974;font-size:8px}.incoming-hangout button,.request-list button{border:0;border-radius:8px;background:#18201c;color:#fff;padding:8px 10px;font-size:8px;font-weight:900}.incoming-hangout button.decline,.request-list button.decline{border:1px solid #d5d0c6;background:#fff;color:#666}.hangout-workspace{display:grid;grid-template-columns:1fr 340px;height:570px;overflow:hidden;border:1px solid #cdc8be;border-radius:23px;background:#fff;box-shadow:0 15px 45px #28251d12}.hangout-map-wrap{position:relative;min-width:0}.trusted-map{position:absolute;inset:0}.map-privacy{position:absolute;z-index:500;left:16px;bottom:16px;border-radius:20px;background:#18201ce8;color:#fff;padding:9px 12px;font-size:8px;font-weight:800}.people-marker-wrap{border:0;background:transparent}.people-marker{display:grid;place-items:center;width:58px;height:52px;border:3px solid #fff;border-radius:18px;background:#d7ff4f;box-shadow:0 7px 18px #18201c44;transition:.15s}.people-marker.selected{outline:3px solid #775cff;outline-offset:2px;transform:scale(1.1)}.people-marker i{font-size:24px;font-style:normal}.people-marker b{position:absolute;top:47px;border-radius:10px;background:#18201c;color:#fff;padding:3px 7px;font-size:7px}.free-person-card{overflow:auto;padding:25px;border-left:1px solid #ddd8ce}.relationship{display:inline-block;border-radius:20px;background:#eeeaff;color:#6046ce;padding:6px 8px;font-size:7px;font-weight:900;letter-spacing:.6px}.person-avatar{display:block;margin:24px 0 8px;font-size:60px}.free-person-card h2{margin:0;font-size:27px}.availability{color:#25815d;font-size:10px;font-weight:800}.person-info{display:grid;gap:7px;margin:18px 0}.person-info span{padding:10px;border-radius:10px;background:#f2efe8;font-size:9px}.person-info b{display:block;margin-bottom:3px;color:#777c78;font-size:7px;text-transform:uppercase}.free-person-card blockquote{margin:12px 0;padding:12px;border-left:3px solid #775cff;background:#f4f1ff;font:12px/1.4 Georgia,serif}.ask-hangout{width:100%;border:0;border-radius:11px;background:#18201c;color:#fff;padding:13px;font-size:10px;font-weight:900}.privacy-secondary{width:100%;border:0;background:transparent;color:#7160c5;padding:11px;font-size:8px;font-weight:800}.hangout-modal,.friend-modal{position:relative;width:min(550px,100%);max-height:calc(100vh - 40px);overflow:auto;border-radius:23px;background:#fff;padding:32px}.hangout-modal h2,.friend-modal h2{margin:6px 0 8px;font-size:29px}.hangout-modal>p:not(.eyebrow),.friend-modal-head>p:not(.eyebrow){color:#717671;font-size:10px}.hangout-modal form,.friend-contact-form,.qr-friend form{display:flex;flex-direction:column;gap:11px;margin-top:20px}.hangout-modal label,.friend-modal label{display:flex;flex-direction:column;gap:5px;font-size:8px;font-weight:900;letter-spacing:.7px;text-transform:uppercase}.hangout-modal input,.hangout-modal select,.hangout-modal textarea,.friend-modal input{height:42px;border:1px solid #d9d4ca;border-radius:9px;background:#fbfaf7;padding:0 10px;font:500 10px Arial,sans-serif;text-transform:none}.hangout-modal textarea{height:75px;padding-top:10px;resize:vertical}.hangout-modal form>small{color:#777;font-size:7px;line-height:1.4}.friend-methods{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:18px}.friend-methods button{border:1px solid #d9d4ca;border-radius:10px;background:#fbfaf7;padding:10px;font-size:9px;font-weight:800}.friend-methods button.active{border-color:#775cff;background:#eeeaff;color:#5e42d2}.qr-friend{padding-top:16px;text-align:center}.qr-friend>div{display:inline-block;padding:10px;border:1px solid #ddd8ce;border-radius:15px}.qr-friend img{display:block;width:180px;height:180px}.qr-friend>div small{display:block;color:#775cff;font-size:7px;font-weight:900;letter-spacing:1px}.qr-friend>p{color:#777;font-size:9px}.new-code{border:0;background:transparent;color:#775cff;padding:10px;font-size:8px;font-weight:900}.request-list{margin-top:22px;border-top:1px solid #e5e0d7}.request-list h3{margin:18px 0 8px;font-size:11px}.request-list>p{color:#777;font-size:9px}.request-list>div{display:grid;grid-template-columns:28px 1fr auto auto;align-items:center;gap:7px;padding:8px 0;border-top:1px solid #eeeae2}.request-list>div>span{font-size:19px}.request-list p{margin:0}.request-list b,.request-list small{display:block;font-size:8px}.request-list small{margin-top:2px;color:#777}.hangout-chat{z-index:60}.hangout-chat .quick-emojis button{width:auto;flex:1;padding:0 6px;font-size:8px}@media(max-width:900px){.hangout-hero{grid-template-columns:1fr}.hangout-workspace{grid-template-columns:1fr;height:auto}.hangout-map-wrap{height:440px}.free-person-card{border-left:0;border-top:1px solid #ddd8ce}.topbar nav{overflow-x:auto}.topbar nav button{white-space:nowrap}}@media(max-width:600px){.hangout-hub{padding-top:18px}.hangout-hero{padding:10px 0 24px}.hangout-hero h1{font-size:44px}.hangout-actions{align-items:flex-start;gap:10px}.incoming-hangout{grid-template-columns:38px 1fr}.incoming-hangout button{grid-row:2}.hangout-map-wrap{height:370px}.hangout-modal,.friend-modal{padding:25px 20px}.field-pair{grid-template-columns:1fr}}
++
++/* Group formation ("Squad up"): additive rules only, reusing the same tokens
++   (colors, radii, spacing) as the rest of hangout.css so this reads as part
++   of the same design system rather than a bolted-on feature. */
++.squad-up {
++  border: 0;
++  border-radius: 20px;
++  background: #775cff;
++  color: #fff;
++  padding: 10px 14px;
++  font-size: 10px;
++  font-weight: 900;
++}
++.squad-up:disabled {
++  background: #d9d4ca;
++  color: #8c8f8b;
++  cursor: not-allowed;
++}
++.squad-list {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: 8px;
++  margin-bottom: 13px;
++}
++.squad-list > b {
++  font-size: 9px;
++  font-weight: 900;
++  letter-spacing: .6px;
++  text-transform: uppercase;
++  color: #777c78;
++}
++.squad-chip {
++  display: flex;
++  flex-direction: column;
++  align-items: flex-start;
++  gap: 2px;
++  border: 1px solid #d9d4ca;
++  border-radius: 14px;
++  background: #fff;
++  padding: 8px 12px;
++}
++.squad-chip span {
++  font-size: 10px;
++  font-weight: 900;
++}
++.squad-chip small {
++  color: #777c78;
++  font-size: 8px;
++}
++.squad-chat .chat-context > span {
++  font-size: 17px;
++  letter-spacing: 2px;
++}
++@media (max-width: 600px) {
++  .friend-action-buttons { flex-wrap: wrap; }
++  .squad-up { width: 100%; }
++}
+diff --git a/app/schedule-gap.css b/app/schedule-gap.css
+index 658ef46..86a8d80 100644
+--- a/app/schedule-gap.css
++++ b/app/schedule-gap.css
+@@ -1 +1,20 @@
+ .schedule-gap-card{display:flex;align-items:center;gap:10px;margin:0 0 14px;padding:12px 14px;border:1px solid #d9d4ca;border-radius:14px;background:#fff}.schedule-gap-card.has-gap{border-color:#9acb55;background:#f5ffe2}.schedule-gap-card>div{display:flex;align-items:center;gap:9px;flex:1}.schedule-gap-card>div>span{display:grid;place-items:center;width:33px;height:33px;border-radius:10px;background:#eeeaff;color:#6048d9}.schedule-gap-card p{margin:0;color:#737873;font-size:9px}.schedule-gap-card p b{display:block;margin-bottom:3px;color:#18201c;font-size:11px}.schedule-gap-card button{border:0;border-radius:9px;background:#18201c;color:#fff;padding:9px 11px;font-size:9px;font-weight:900}.schedule-gap-card button.manage-schedule{border:1px solid #d7d2c8;background:#fff;color:#565b57}.schedule-modal{position:relative;width:min(650px,100%);max-height:calc(100vh - 40px);overflow:auto;border-radius:23px;background:#fff;padding:32px}.schedule-modal h2{margin:6px 0 8px;font-size:30px}.schedule-modal>p:not(.eyebrow){color:#717671;font-size:10px}.schedule-privacy-options{display:flex;gap:18px;margin:16px 0;padding:11px;border-radius:10px;background:#f3f0e9;font-size:9px;font-weight:800}.schedule-privacy-options label{display:flex;align-items:center;gap:5px}.schedule-privacy-options input{accent-color:#775cff}.schedule-form{display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:9px;padding-top:5px}.schedule-form label{display:flex;flex-direction:column;gap:5px;font-size:8px;font-weight:900;letter-spacing:.6px;text-transform:uppercase}.schedule-form input,.schedule-form select{height:41px;border:1px solid #d9d4ca;border-radius:9px;background:#fbfaf7;padding:0 10px;font:500 10px Arial,sans-serif;text-transform:none}.schedule-form .field-pair{grid-column:1/3}.schedule-form .signup-submit{align-self:end;margin:0}.class-list{display:grid;gap:7px;margin-top:18px;padding-top:14px;border-top:1px solid #e6e1d8}.class-list article{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid #e2ddd3;border-radius:10px}.class-list article>span{border-radius:7px;background:#eeeaff;color:#6048d9;padding:5px 7px;font-size:7px;font-weight:900;text-transform:uppercase}.class-list article p{flex:1;margin:0;color:#777;font-size:8px}.class-list article p b{display:block;color:#18201c;font-size:10px}.class-list article button{border:0;background:transparent;color:#a4493e;font-size:8px;font-weight:900}.empty-class-list{margin:0;border:1px dashed #d9d4ca;border-radius:10px;padding:15px;color:#777;font-size:9px;text-align:center}@media(max-width:650px){.schedule-gap-card{align-items:flex-start;flex-wrap:wrap}.schedule-gap-card>div{width:100%}.schedule-form{grid-template-columns:1fr}.schedule-form .field-pair{grid-column:auto}.schedule-modal{padding:26px 20px}.schedule-privacy-options{flex-direction:column;gap:8px}}
++
++/* Privacy credit badge: reuses the same pill treatment as .relationship in
++   hangout.css (#eeeaff / #6046ce) so the "local-only" design reads as part
++   of the app's existing visual language instead of a new one-off callout. */
++.privacy-credit {
++  display: inline-block;
++  flex: 0 0 auto;
++  border-radius: 20px;
++  background: #eeeaff;
++  color: #6046ce;
++  padding: 6px 10px;
++  font-size: 8px;
++  font-weight: 900;
++  letter-spacing: .4px;
++  white-space: nowrap;
++}
++@media (max-width: 650px) {
++  .privacy-credit { white-space: normal; }
++}
