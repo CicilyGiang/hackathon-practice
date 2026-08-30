@@ -52,6 +52,14 @@ http://localhost:3000
 
 The development server also listens on the local network so the responsive interface can be tested on a phone connected to the same Wi-Fi.
 
+## Accessing Sidequest
+
+Sidequest is currently a local hackathon prototype. A public hosted version is not included in this repository.
+
+The project video demonstrates the complete experience. Team members who want to run the source code locally should follow the database and environment setup below.
+
+If Sidequest is hosted in the future, the deployment server will hold the database configuration. People visiting that hosted website will not need to install PostgreSQL, configure Tailscale or create an environment file themselves.
+
 ## PostgreSQL setup
 
 PostgreSQL is required for registration and login. Without it, the signup form displays:
@@ -59,6 +67,8 @@ PostgreSQL is required for registration and login. Without it, the signup form d
 ```text
 Database connection is not configured.
 ```
+
+For the shared team database over Tailscale, follow `TEAM_DATABASE_SETUP.md`. It contains the current host-specific setup and security requirements.
 
 ### 1. Create a fresh database
 
@@ -78,7 +88,10 @@ Example for a new local database:
 
 ```bash
 psql "postgresql://USERNAME:PASSWORD@127.0.0.1:5432/sidequest" -f database/hackthon.sql
+psql "postgresql://USERNAME:PASSWORD@127.0.0.1:5432/sidequest" -f database/migrations/2026-08-30-auth-api.sql
 ```
+
+The authentication migration is safe to rerun and does not drop existing data. It is required for signup, profile loading and session creation through the restricted shared application role.
 
 The application expects the tables and functions created by this script, including:
 
@@ -90,7 +103,19 @@ The application expects the tables and functions created by this script, includi
 
 ### 3. Configure local environment variables
 
-Create an ignored file named `.dev.vars` in the repository root:
+Copy `.env.example` to an ignored file named `.env` in the repository root:
+
+```bash
+cp .env.example .env
+```
+
+On Windows PowerShell, use:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Then replace the placeholders:
 
 ```text
 DATABASE_URL=postgresql://USERNAME:PASSWORD@HOST:PORT/DATABASE
@@ -104,13 +129,15 @@ DATABASE_URL=postgresql://USERNAME:PASSWORD@127.0.0.1:5432/sidequest
 DATABASE_SSL=disable
 ```
 
-Restart the development server after creating or changing `.dev.vars`:
+`127.0.0.1` works only on the computer that is hosting PostgreSQL. Other team members connecting to the shared database must use the host computer's Tailscale IPv4 address in their own local `.env` file and must be connected to the approved Tailscale network.
+
+Restart the development server after creating or changing `.env`:
 
 ```bash
 npm run dev
 ```
 
-Never commit `.dev.vars`, database passwords, API keys or connection strings. Local environment files are excluded by `.gitignore`.
+Never commit `.env`, database passwords, API keys or connection strings. Local environment files are excluded by `.gitignore`.
 
 ## Account rules
 
@@ -128,7 +155,7 @@ Registration and login are stored in PostgreSQL. After successful authentication
 
 `app/api/recommend/route.ts` can use the Anthropic Messages API to generate personalized recommendation text and match scores. This integration is optional; without an API key, the route falls back to a local heuristic.
 
-To enable it locally, add the key to `.dev.vars`:
+To enable it locally, add the key to `.env`:
 
 ```text
 ANTHROPIC_API_KEY=replace_with_your_key
@@ -189,7 +216,7 @@ npm --version
 
 ### Database connection is not configured
 
-Confirm that `.dev.vars` exists in the repository root, contains `DATABASE_URL`, and that the development server was restarted after the file was created.
+Confirm that `.env` exists in the repository root, contains `DATABASE_URL`, and that the development server was restarted after the file was created.
 
 ### Account creation failed
 
