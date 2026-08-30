@@ -3899,6 +3899,41 @@ TO campus_admin_role;
 
 
 -- ============================================================
+-- 64A. SHARED TEAM APPLICATION LOGIN
+--
+-- The password below is a PostgreSQL SCRAM-SHA-256 verifier.
+-- No plaintext database password is stored in this SQL file.
+-- Running this block again safely refreshes the login and grant.
+-- ============================================================
+
+DO $role_setup$
+BEGIN
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_roles
+        WHERE rolname = 'sidequest_team'
+    )
+    THEN
+
+        CREATE ROLE sidequest_team
+        WITH LOGIN
+        PASSWORD 'SCRAM-SHA-256$4096:DXy5DDH9A7x8k0iWrrbPkA==$cwkqzMqd3uJLRJS6mUH/Uto1KIDt2txSdjVfhEVY9JM=:cHNCa0sqKbWDgSoZRKHG53hRB5y5+8jjhMlkIhArAIY=';
+
+    ELSE
+
+        ALTER ROLE sidequest_team
+        WITH LOGIN
+        PASSWORD 'SCRAM-SHA-256$4096:DXy5DDH9A7x8k0iWrrbPkA==$cwkqzMqd3uJLRJS6mUH/Uto1KIDt2txSdjVfhEVY9JM=:cHNCa0sqKbWDgSoZRKHG53hRB5y5+8jjhMlkIhArAIY=';
+
+    END IF;
+
+    GRANT campus_app_role TO sidequest_team;
+
+END $role_setup$;
+
+
+-- ============================================================
 -- 65. SIDEQUEST SOCIAL PROFILE EXTENSION
 -- Database-only production design for the current UI features.
 -- ============================================================
